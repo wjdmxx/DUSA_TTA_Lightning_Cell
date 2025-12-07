@@ -1,0 +1,29 @@
+# Default trainer configuration
+accelerator: "gpu"
+devices: 1  # Number of GPUs
+strategy: "auto"  # auto, ddp, ddp_spawn, fsdp, etc.
+precision: "16-mixed"  # 32, 16-mixed, bf16-mixed
+
+# Training settings (note: these are task iterations, not traditional epochs)
+max_epochs: 1  # Process each task once
+gradient_clip_val: 0.0
+accumulate_grad_batches: 1
+
+# Validation
+check_val_every_n_epoch: 1
+val_check_interval: 1.0
+
+# Logging
+log_every_n_steps: 10
+enable_progress_bar: true
+enable_model_summary: true
+
+# Checkpointing
+enable_checkpointing: false  # No checkpoints during TTA by default
+
+# Reproducibility
+deterministic: false
+benchmark: true
+
+# Other
+fast_dev_run: false  # Set to true for quick debugging

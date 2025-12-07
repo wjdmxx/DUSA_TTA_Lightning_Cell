@@ -1,0 +1,48 @@
+# @package _global_
+
+# ConvNeXt-Large on ImageNet-C with DUSA TTA
+
+defaults:
+  - override /model: combined
+  - override /data: imagenet_c
+  - override /trainer: default
+
+# Experiment name
+experiment_name: "convnext_large_imagenet_c_dusa"
+
+# Model paths (UPDATE THESE)
+model:
+  discriminative:
+    checkpoint_path: null  # Use ImageNet pretrained from timm
+  generative:
+    sit_checkpoint: "path/to/REPA-SiT-XL-2-256.pt"
+
+# Data
+data:
+  batch_size: 16
+  corruptions: null  # Test all corruptions
+  severities: null   # Test all severities
+
+# TTA settings
+tta:
+  continual: false
+  tta_step: 1
+  update_auxiliary: true
+  update_task_norm_only: true
+
+# Optimizer
+optimizer:
+  learning_rate: 1e-5
+  weight_decay: 0.0
+
+# Trainer
+trainer:
+  devices: 1
+  precision: "16-mixed"
+  max_epochs: 1
+
+# Logging
+logging:
+  use_wandb: true
+  wandb_project: "dusa-tta"
+  wandb_entity: null  # Set your W&B entity

@@ -1,0 +1,8 @@
+# ConvNeXt-Large discriminative model only
+discriminative:
+  model_name: "convnext_large"
+  pretrained: true
+  checkpoint_path: null
+  num_classes: 1000
+
+generative: null  # No auxiliary model

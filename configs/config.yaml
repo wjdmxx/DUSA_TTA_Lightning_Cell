@@ -1,0 +1,43 @@
+# Main configuration file
+defaults:
+  - model: combined
+  - data: imagenet_c
+  - trainer: default
+  - experiment: null  # Override with experiment configs
+  - _self_
+
+# Paths
+work_dir: ${hydra:runtime.output_dir}
+data_root: "path/to/ImageNet-C"  # UPDATE THIS
+
+# Experiment settings
+seed: 42
+experiment_name: "dusa_tta_convnext"
+
+# TTA settings
+tta:
+  continual: false  # If false, reset model between tasks
+  tta_step: 1  # Number of adaptation steps per batch
+  update_auxiliary: true  # Update generative model
+  update_task_norm_only: true  # Only update task model norms
+  forward_mode: "normed_logits_with_logits"  # DUSA default
+
+# Optimizer settings
+optimizer:
+  learning_rate: 1e-5
+  weight_decay: 0.0
+
+# Logging
+logging:
+  use_wandb: true
+  wandb_project: "dusa-tta"
+  wandb_entity: null  # Set to your W&B username/team
+  log_aux_metrics: true  # Log auxiliary metrics (loss_top_i, auc, etc.)
+
+# Hydra settings
+hydra:
+  run:
+    dir: outputs/${experiment_name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: multirun/${experiment_name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}

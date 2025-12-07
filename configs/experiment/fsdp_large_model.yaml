@@ -1,0 +1,22 @@
+# @package _global_
+
+# FSDP example for very large models (e.g., if memory constrained)
+
+defaults:
+  - override /model: combined
+  - override /data: imagenet_c
+  - override /trainer: default
+
+experiment_name: "convnext_large_imagenet_c_dusa_fsdp"
+
+# Trainer - FSDP for large model
+trainer:
+  devices: 4
+  strategy: "fsdp"
+  precision: "bf16-mixed"  # BF16 recommended for FSDP
+  max_epochs: 1
+
+# Data (smaller batch size per GPU for FSDP overhead)
+data:
+  batch_size: 16
+  num_workers: 4

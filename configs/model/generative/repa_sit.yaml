@@ -1,0 +1,18 @@
+# REPA SiT generative model config
+sit_model_name: "SiT-XL/2"
+sit_checkpoint: "path/to/REPA-SiT-XL-2-256.pt"
+num_classes: 1000
+
+vae_pretrained: "stabilityai/sd-vae-ft-ema"
+vae_scaling_factor: 0.18215
+
+topk: 4
+rand_budget: 2
+temperature: 1.0
+sample_reverse_logits: false
+
+scheduler_type: "linear"
+time_sampler_type: "uniform"
+time_sampler_kwargs:
+  t_min: 0.0
+  t_max: 1.0

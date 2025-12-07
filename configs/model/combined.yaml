@@ -1,0 +1,29 @@
+# Discriminative model: ConvNeXt-Large
+discriminative:
+  model_name: "convnext_large"
+  pretrained: true
+  checkpoint_path: null  # Set to custom checkpoint path if needed
+  num_classes: 1000
+
+# Generative model: REPA SiT
+generative:
+  sit_model_name: "SiT-XL/2"  # SiT-XL/2 or SiT-B/2
+  sit_checkpoint: "path/to/REPA-SiT-XL-2-256.pt"  # UPDATE THIS
+  num_classes: 1000
+  
+  # VAE settings
+  vae_pretrained: "stabilityai/sd-vae-ft-ema"
+  vae_scaling_factor: 0.18215
+  
+  # Loss settings
+  topk: 4
+  rand_budget: 2
+  temperature: 1.0
+  sample_reverse_logits: false
+  
+  # Scheduler settings
+  scheduler_type: "linear"  # linear or reverse_linear
+  time_sampler_type: "uniform"
+  time_sampler_kwargs:
+    t_min: 0.0
+    t_max: 1.0

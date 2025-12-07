@@ -1,0 +1,51 @@
+# @package _global_
+
+# Multi-GPU DDP example on 4 GPUs
+
+defaults:
+  - override /model: combined
+  - override /data: imagenet_c
+  - override /trainer: default
+
+experiment_name: "convnext_large_imagenet_c_dusa_4gpu"
+
+# Model
+model:
+  discriminative:
+    model_name: "convnext_large"
+    pretrained: true
+  generative:
+    sit_checkpoint: "path/to/REPA-SiT-XL-2-256.pt"
+    topk: 4
+    rand_budget: 2
+
+# Data (larger batch size for multi-GPU)
+data:
+  batch_size: 32  # Per GPU, total = 32 * 4 = 128
+  num_workers: 8
+  corruptions: null
+  severities: null
+
+# TTA
+tta:
+  continual: false
+  tta_step: 1
+  update_auxiliary: true
+  update_task_norm_only: true
+
+# Optimizer
+optimizer:
+  learning_rate: 1e-5
+
+# Trainer - DDP on 4 GPUs
+trainer:
+  devices: 4
+  strategy: "ddp"  # or "ddp_spawn" for debugging
+  precision: "16-mixed"
+  max_epochs: 1
+  accumulate_grad_batches: 1
+
+# Logging
+logging:
+  use_wandb: true
+  wandb_project: "dusa-tta"
