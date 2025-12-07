@@ -1,0 +1,21 @@
+# ImageNet-C dataset configuration
+root: "${data_root}"
+
+# Corruptions to test (null = all 19 corruptions)
+corruptions: null
+# Example: ["gaussian_noise", "glass_blur", "fog"]
+
+# Severities to test (null = all 5 severities)
+severities: null
+# Example: [3, 4, 5]
+
+# DataLoader settings
+batch_size: 16
+num_workers: 4
+pin_memory: true
+persistent_workers: true
+
+# Transform settings
+task_input_size: 224
+task_mean: [0.485, 0.456, 0.406]  # ImageNet mean
+task_std: [0.229, 0.224, 0.225]   # ImageNet std
