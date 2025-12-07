@@ -35,7 +35,6 @@ multirun/
 wandb/
 
 # Data and checkpoints
-data/
 checkpoints/
 *.pth
 *.pt
