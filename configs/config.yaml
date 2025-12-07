@@ -8,7 +8,7 @@ defaults:
 
 # Paths
 work_dir: ${hydra:runtime.output_dir}
-data_root: "path/to/ImageNet-C"  # UPDATE THIS
+data_root: "/mnt/bit/data/imagenet-c/"  # UPDATE THIS
 
 # Experiment settings
 seed: 42
@@ -31,7 +31,7 @@ optimizer:
 logging:
   use_wandb: true
   wandb_project: "dusa-tta"
-  wandb_entity: null  # Set to your W&B username/team
+  wandb_entity: "lyxszn-beihang-university"  # Set to your W&B username/team
   log_aux_metrics: true  # Log auxiliary metrics (loss_top_i, auc, etc.)
 
 # Hydra settings

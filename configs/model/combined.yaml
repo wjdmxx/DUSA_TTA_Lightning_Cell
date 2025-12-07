@@ -2,13 +2,13 @@
 discriminative:
   model_name: "convnext_large"
   pretrained: true
-  checkpoint_path: null  # Set to custom checkpoint path if needed
+  checkpoint_path: "/mnt/bit/liyuanxi/projects/DUSA_flow/classification/pretrained_models/convnext-large_3rdparty_64xb64_in1k_20220124-f8a0ded0.pth"  # Set to custom checkpoint path if needed
   num_classes: 1000
 
 # Generative model: REPA SiT
 generative:
   sit_model_name: "SiT-XL/2"  # SiT-XL/2 or SiT-B/2
-  sit_checkpoint: "path/to/REPA-SiT-XL-2-256.pt"  # UPDATE THIS
+  sit_checkpoint: "/mnt/bit/liyuanxi/projects/DUSA_flow/classification/pretrained_models/REPA-SiT-XL-2-256.pt"  # UPDATE THIS
   num_classes: 1000
   
   # VAE settings
