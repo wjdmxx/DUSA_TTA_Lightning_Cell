@@ -30,7 +30,7 @@ class CombinedModel(nn.Module):
         self.auxiliary_model = generative_model
         
         # Get feature dimension for potential feature alignment
-        self.feature_dim = self.task_model.get_feature_dim()
+        # self.feature_dim = self.task_model.get_feature_dim()
     
     def task_forward(
         self,
@@ -75,7 +75,7 @@ class CombinedModel(nn.Module):
             auxiliary_loss: Auxiliary loss (scalar) or None
         """
         # Get logits and features from task model
-        logits, features = self.task_model(images, return_features=True)
+        logits, features = self.task_model(images, return_features=False)
         
         # If no auxiliary model or mode is logits-only, return early
         if self.auxiliary_model is None or mode == "logits":
@@ -116,12 +116,10 @@ class CombinedModel(nn.Module):
     
     def set_task_train_mode(
         self,
-        update_all: bool = False,
         update_norm_only: bool = True,
     ):
         """Configure task model training mode."""
         self.task_model.set_train_mode(
-            update_all=update_all,
             update_norm_only=update_norm_only,
         )
     

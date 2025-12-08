@@ -2,7 +2,7 @@
 accelerator: "gpu"
 devices: 1  # Number of GPUs
 strategy: "auto"  # auto, ddp, ddp_spawn, fsdp, etc.
-precision: "16-mixed"  # 32, 16-mixed, bf16-mixed
+precision: "bf16-mixed"  # 32, 16-mixed, bf16-mixed
 
 # Training settings (note: these are task iterations, not traditional epochs)
 max_epochs: 1  # Process each task once

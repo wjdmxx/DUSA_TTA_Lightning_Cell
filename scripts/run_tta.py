@@ -136,32 +136,13 @@ def main(cfg: DictConfig):
     )
     
     # Manual optimization for better control
-    tta_module.automatic_optimization = False
+    tta_module.automatic_optimization = True
     
     # Setup logging
     loggers = setup_logging(cfg)
     
     # Create dataloaders
     task_dataloaders = create_dataloaders(cfg)
-    
-    # Trainer
-    trainer = pl.Trainer(
-        accelerator=cfg.trainer.accelerator,
-        devices=cfg.trainer.devices,
-        strategy=cfg.trainer.strategy,
-        precision=cfg.trainer.precision,
-        max_epochs=cfg.trainer.max_epochs,
-        gradient_clip_val=cfg.trainer.gradient_clip_val,
-        accumulate_grad_batches=cfg.trainer.accumulate_grad_batches,
-        log_every_n_steps=cfg.trainer.log_every_n_steps,
-        enable_progress_bar=cfg.trainer.enable_progress_bar,
-        enable_model_summary=cfg.trainer.enable_model_summary,
-        enable_checkpointing=cfg.trainer.enable_checkpointing,
-        logger=loggers,
-        deterministic=cfg.trainer.deterministic,
-        benchmark=cfg.trainer.benchmark,
-        fast_dev_run=cfg.trainer.fast_dev_run,
-    )
     
     # Run TTA on each task
     print("\n" + "=" * 80)
@@ -174,6 +155,25 @@ def main(cfg: DictConfig):
         print(f"\n{'='*80}")
         print(f"Task {task_idx + 1}/{len(task_dataloaders)}: {task_name}")
         print(f"{'='*80}")
+
+        # Trainer
+        trainer = pl.Trainer(
+            accelerator=cfg.trainer.accelerator,
+            devices=cfg.trainer.devices,
+            strategy=cfg.trainer.strategy,
+            precision=cfg.trainer.precision,
+            max_epochs=cfg.trainer.max_epochs,
+            gradient_clip_val=cfg.trainer.gradient_clip_val,
+            accumulate_grad_batches=cfg.trainer.accumulate_grad_batches,
+            log_every_n_steps=cfg.trainer.log_every_n_steps,
+            enable_progress_bar=cfg.trainer.enable_progress_bar,
+            enable_model_summary=cfg.trainer.enable_model_summary,
+            enable_checkpointing=cfg.trainer.enable_checkpointing,
+            logger=loggers,
+            deterministic=cfg.trainer.deterministic,
+            benchmark=cfg.trainer.benchmark,
+            fast_dev_run=cfg.trainer.fast_dev_run,
+        )
         
         # Set current task info
         trainer.current_task_info = {
@@ -186,13 +186,16 @@ def main(cfg: DictConfig):
         if not cfg.tta.continual and task_idx > 0:
             tta_module.reset_model()
         
+        # Reset epoch count to allow training on new task
+        trainer.fit_loop.epoch_progress.current.completed = 0
+
         # Run TTA on this task
         trainer.fit(tta_module, train_dataloaders=task_dataloader)
         
         # Log task completion
         if loggers:
             for logger in loggers:
-                if hasattr(logger, "experiment"):
+                if isinstance(logger, WandbLogger):
                     logger.experiment.log({"task_completed": task_name, "task_idx": task_idx})
         
         print(f"Completed task: {task_name}")

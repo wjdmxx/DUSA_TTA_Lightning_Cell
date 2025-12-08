@@ -50,6 +50,11 @@ class DUSATTAModule(pl.LightningModule):
         self.forward_mode = forward_mode
         self.log_aux_metrics = log_aux_metrics
         
+        # Metrics accumulation
+        self.total_correct_top1 = 0.0
+        self.total_correct_top5 = 0.0
+        self.total_samples = 0.0
+        
         # Save initial model state for reset
         self.save_hyperparameters(ignore=["model"])
         self.initial_model_state = None
@@ -61,7 +66,6 @@ class DUSATTAModule(pl.LightningModule):
         """Configure which parameters to update."""
         # Set task model training mode
         self.model.set_task_train_mode(
-            update_all=False,
             update_norm_only=self.update_task_norm_only,
         )
         
@@ -145,23 +149,56 @@ class DUSATTAModule(pl.LightningModule):
             # Only optimize if we have auxiliary loss
             if loss is not None:
                 # Manual optimization (Lightning automatic optimization disabled)
-                if self.automatic_optimization:
-                    return loss
-                else:
+                if not self.automatic_optimization:
                     # Manual backward and optimizer step
                     opt = self.optimizers()
                     opt.zero_grad()
                     self.manual_backward(loss)
                     opt.step()
         
-        # Log metrics
-        self.log_dict(
-            {f"train/{k}": v for k, v in metrics.items()},
-            on_step=True,
-            on_epoch=True,
-            prog_bar=True,
-            logger=True,
-        )
+        # Update cumulative metrics
+        batch_size = batch["labels"].size(0)
+        self.total_samples += batch_size
+        self.total_correct_top1 += metrics["top1"] * batch_size / 100.0
+        self.total_correct_top5 += metrics["top5"] * batch_size / 100.0
+        
+        avg_top1 = self.total_correct_top1 / self.total_samples * 100.0
+        avg_top5 = self.total_correct_top5 / self.total_samples * 100.0
+        
+        # Add average metrics to log
+        metrics["avg_top1"] = avg_top1
+        metrics["avg_top5"] = avg_top5
+
+        # Log metrics with selective progress bar display
+        prog_bar_metrics = {}
+        other_metrics = {}
+        
+        for k, v in metrics.items():
+            key = f"train/{k}"
+            if k in ["loss", "avg_top1"]:
+                prog_bar_metrics[key] = v
+            else:
+                other_metrics[key] = v
+        
+        # Log progress bar metrics
+        if prog_bar_metrics:
+            self.log_dict(
+                prog_bar_metrics,
+                on_step=True,
+                on_epoch=True,
+                prog_bar=True,
+                logger=True,
+            )
+        
+        # Log other metrics
+        if other_metrics:
+            self.log_dict(
+                other_metrics,
+                on_step=True,
+                on_epoch=True,
+                prog_bar=False,
+                logger=True,
+            )
         
         return loss
     
@@ -239,6 +276,11 @@ class DUSATTAModule(pl.LightningModule):
     
     def on_train_epoch_start(self):
         """Called at the start of each task (epoch in our case)."""
+        # Reset metrics
+        self.total_correct_top1 = 0.0
+        self.total_correct_top5 = 0.0
+        self.total_samples = 0.0
+
         # Reset model if not continual
         if not self.continual and self.current_epoch > 0:
             self.reset_model()

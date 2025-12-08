@@ -6,11 +6,11 @@ corruptions: null
 # Example: ["gaussian_noise", "glass_blur", "fog"]
 
 # Severities to test (null = all 5 severities)
-severities: null
+severities: [5]
 # Example: [3, 4, 5]
 
 # DataLoader settings
-batch_size: 16
+batch_size: 8
 num_workers: 4
 pin_memory: true
 persistent_workers: true

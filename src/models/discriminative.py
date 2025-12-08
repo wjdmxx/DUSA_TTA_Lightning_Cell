@@ -110,7 +110,6 @@ class TimmClassifier(nn.Module):
     
     def set_train_mode(
         self,
-        update_all: bool = False,
         update_norm_only: bool = True,
     ):
         """
@@ -120,28 +119,27 @@ class TimmClassifier(nn.Module):
             update_all: If True, make all parameters trainable
             update_norm_only: If True, only update normalization layers (BN, LN, GN)
         """
-        if update_all:
+        if not update_norm_only:
             self.model.requires_grad_(True)
             return
         
         # Freeze all parameters
         self.model.requires_grad_(False)
         
-        if update_norm_only:
-            # Only update normalization layers
-            for name, module in self.model.named_modules():
-                if isinstance(module, (
-                    nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d,
-                    nn.LayerNorm, nn.GroupNorm, nn.InstanceNorm1d,
-                    nn.InstanceNorm2d, nn.InstanceNorm3d
-                )):
-                    module.requires_grad_(True)
-                    # For BN: use only current batch statistics
-                    if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
-                        if hasattr(module, "track_running_stats"):
-                            module.track_running_stats = False
-                            module.running_mean = None
-                            module.running_var = None
+        # Only update normalization layers
+        for name, module in self.model.named_modules():
+            if isinstance(module, (
+                nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d,
+                nn.LayerNorm, nn.GroupNorm, nn.InstanceNorm1d,
+                nn.InstanceNorm2d, nn.InstanceNorm3d
+            )):
+                module.requires_grad_(True)
+                # For BN: use only current batch statistics
+                if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+                    if hasattr(module, "track_running_stats"):
+                        module.track_running_stats = False
+                        module.running_mean = None
+                        module.running_var = None
 
 
 def create_convnext_large(
