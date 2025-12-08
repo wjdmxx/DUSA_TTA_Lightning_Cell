@@ -10,13 +10,35 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, Callback
 import torch
 from torch.utils.data import DataLoader
 
 from src.models import create_combined_model
 from src.data import create_imagenet_c_tasks, create_tta_transforms, custom_collate_fn
 from src.tta import DUSATTAModule
+
+
+class TaskSwitchCallback(Callback):
+    """Callback to handle task switching in TTA."""
+    
+    def __init__(self, task_name: str, task_idx: int, total_tasks: int, continual: bool = False):
+        super().__init__()
+        self.task_name = task_name
+        self.task_idx = task_idx
+        self.total_tasks = total_tasks
+        self.continual = continual
+    
+    def on_train_start(self, trainer, pl_module):
+        """Reset model at the start of each task if not continual."""
+        # Set task info on module
+        pl_module.set_task_info(self.task_name, self.task_idx)
+        
+        # Reset model if not continual (except for first task)
+        if not self.continual and self.task_idx > 0:
+            pl_module.reset_model()
+            # Need to reconfigure optimizer after model reset
+            trainer.strategy.setup_optimizers(trainer)
 
 
 def setup_logging(cfg: DictConfig):
@@ -130,19 +152,20 @@ def main(cfg: DictConfig):
         continual=cfg.tta.continual,
         update_auxiliary=cfg.tta.update_auxiliary,
         update_task_norm_only=cfg.tta.update_task_norm_only,
-        tta_step=cfg.tta.tta_step,
         forward_mode=cfg.tta.forward_mode,
         log_aux_metrics=cfg.logging.log_aux_metrics,
+        num_classes=cfg.model.discriminative.num_classes,
     )
     
-    # Manual optimization for better control
-    tta_module.automatic_optimization = True
+    # Save initial model state before any TTA
+    tta_module.save_initial_state()
     
-    # Setup logging
+    # Setup logging (create loggers once)
     loggers = setup_logging(cfg)
     
     # Create dataloaders
     task_dataloaders = create_dataloaders(cfg)
+    total_tasks = len(task_dataloaders)
     
     # Run TTA on each task
     print("\n" + "=" * 80)
@@ -153,56 +176,102 @@ def main(cfg: DictConfig):
     
     for task_idx, (task_name, task_dataloader) in enumerate(task_dataloaders):
         print(f"\n{'='*80}")
-        print(f"Task {task_idx + 1}/{len(task_dataloaders)}: {task_name}")
+        print(f"Task {task_idx + 1}/{total_tasks}: {task_name}")
         print(f"{'='*80}")
 
-        # Trainer
+        # Create task-specific callback for model reset
+        task_callback = TaskSwitchCallback(
+            task_name=task_name,
+            task_idx=task_idx,
+            total_tasks=total_tasks,
+            continual=cfg.tta.continual,
+        )
+        
+        # Create trainer for this task
+        # Note: We create a new trainer per task to properly reset training state,
+        # but we reuse the same loggers to maintain consistent logging
         trainer = pl.Trainer(
             accelerator=cfg.trainer.accelerator,
             devices=cfg.trainer.devices,
             strategy=cfg.trainer.strategy,
             precision=cfg.trainer.precision,
-            max_epochs=cfg.trainer.max_epochs,
+            max_epochs=1,  # Always 1 epoch per task
             gradient_clip_val=cfg.trainer.gradient_clip_val,
             accumulate_grad_batches=cfg.trainer.accumulate_grad_batches,
             log_every_n_steps=cfg.trainer.log_every_n_steps,
             enable_progress_bar=cfg.trainer.enable_progress_bar,
-            enable_model_summary=cfg.trainer.enable_model_summary,
+            enable_model_summary=False,  # Only show once at start
             enable_checkpointing=cfg.trainer.enable_checkpointing,
             logger=loggers,
             deterministic=cfg.trainer.deterministic,
             benchmark=cfg.trainer.benchmark,
             fast_dev_run=cfg.trainer.fast_dev_run,
+            callbacks=[task_callback],
         )
-        
-        # Set current task info
-        trainer.current_task_info = {
-            "task_name": task_name,
-            "task_idx": task_idx,
-            "all_steps": len(task_dataloader),
-        }
-        
-        # Reset model if not continual (except for first task)
-        if not cfg.tta.continual and task_idx > 0:
-            tta_module.reset_model()
-        
-        # Reset epoch count to allow training on new task
-        trainer.fit_loop.epoch_progress.current.completed = 0
 
         # Run TTA on this task
         trainer.fit(tta_module, train_dataloaders=task_dataloader)
         
-        # Log task completion
+        # Store task results using module's method
+        final_acc = tta_module.get_final_accuracy()
+        all_task_results[task_name] = {
+            "top1": final_acc["top1"],
+            "top5": final_acc["top5"],
+        }
+        
+        # Log task completion to W&B with unique task identifier
         if loggers:
             for logger in loggers:
                 if isinstance(logger, WandbLogger):
-                    logger.experiment.log({"task_completed": task_name, "task_idx": task_idx})
+                    logger.experiment.log({
+                        f"task_results/{task_name}/top1": final_acc["top1"],
+                        f"task_results/{task_name}/top5": final_acc["top5"],
+                    })
         
         print(f"Completed task: {task_name}")
     
+    # Print and log summary of all tasks
     print("\n" + "=" * 80)
     print("All tasks completed!")
     print("=" * 80)
+    
+    if all_task_results:
+        # Calculate statistics
+        top1_scores = [v["top1"] for v in all_task_results.values()]
+        top5_scores = [v["top5"] for v in all_task_results.values()]
+        mean_top1 = sum(top1_scores) / len(top1_scores)
+        mean_top5 = sum(top5_scores) / len(top5_scores)
+        
+        # Print detailed results
+        print("\n" + "=" * 80)
+        print("FINAL RESULTS SUMMARY")
+        print("=" * 80)
+        print(f"{'Task':<40} {'Top-1 (%)':<12} {'Top-5 (%)':<12}")
+        print("-" * 64)
+        for task_name, acc in all_task_results.items():
+            print(f"{task_name:<40} {acc['top1']:<12.2f} {acc['top5']:<12.2f}")
+        print("-" * 64)
+        print(f"{'MEAN':<40} {mean_top1:<12.2f} {mean_top5:<12.2f}")
+        print("=" * 80)
+        
+        # Log summary to W&B
+        if loggers:
+            for logger in loggers:
+                if isinstance(logger, WandbLogger):
+                    # Log summary statistics
+                    logger.experiment.log({
+                        "summary/mean_top1": mean_top1,
+                        "summary/mean_top5": mean_top5,
+                        "summary/num_tasks": len(all_task_results),
+                    })
+                    
+                    # Create a summary table
+                    import wandb
+                    table = wandb.Table(columns=["Task", "Top-1 (%)", "Top-5 (%)"])
+                    for task_name, acc in all_task_results.items():
+                        table.add_data(task_name, acc["top1"], acc["top5"])
+                    table.add_data("MEAN", mean_top1, mean_top5)
+                    logger.experiment.log({"summary/results_table": table})
     
     # Finish logging
     if loggers:

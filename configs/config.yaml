@@ -17,11 +17,10 @@ experiment_name: "timm_in1k_4e-5_8x1_auto_bf16_update_all"
 # TTA settings
 tta:
   continual: false  # If false, reset model between tasks
-  tta_step: 1  # Number of adaptation steps per batch
   update_auxiliary: true  # Update generative model
   update_task_norm_only: false  # Only update task model norms
   forward_mode: "normed_logits_with_logits"  # DUSA default
-  # forward_mode: "logits"  # DUSA default
+  # forward_mode: "logits"  # Disable auxiliary model
 
 
 # Optimizer settings
@@ -34,7 +33,7 @@ logging:
   use_wandb: true
   wandb_project: "dusa-tta"
   wandb_entity: "lyxszn-beihang-university"  # Set to your W&B username/team
-  log_aux_metrics: true  # Log auxiliary metrics (loss_top_i, auc, etc.)
+  log_aux_metrics: false  # Log auxiliary metrics (loss_top_i, auc, etc.) - disabled by default
 
 # Hydra settings
 hydra:

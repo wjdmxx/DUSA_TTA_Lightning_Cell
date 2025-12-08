@@ -22,7 +22,7 @@ class TaskTransform:
         self.std = std
         
         self.transform = T.Compose([
-            # T.Resize(256),
+            T.Resize(256),
             T.CenterCrop(input_size),
             T.ToTensor(),
             T.Normalize(mean=mean, std=std),

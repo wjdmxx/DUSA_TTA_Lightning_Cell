@@ -1,6 +1,7 @@
 """PyTorch Lightning module for DUSA TTA."""
 import torch
 import pytorch_lightning as pl
+from torchmetrics import Accuracy
 from typing import Optional, Dict, Any
 from copy import deepcopy
 
@@ -12,6 +13,8 @@ class DUSATTAModule(pl.LightningModule):
     """
     Lightning module for DUSA Test-Time Adaptation.
     No training phase - only test-time adaptation on each task.
+    
+    Uses automatic optimization with gradient accumulation support.
     """
     
     def __init__(
@@ -22,9 +25,9 @@ class DUSATTAModule(pl.LightningModule):
         continual: bool = False,
         update_auxiliary: bool = True,
         update_task_norm_only: bool = True,
-        tta_step: int = 1,
         forward_mode: str = "normed_logits_with_logits",
-        log_aux_metrics: bool = True,
+        log_aux_metrics: bool = False,
+        num_classes: int = 1000,
     ):
         """
         Args:
@@ -34,9 +37,9 @@ class DUSATTAModule(pl.LightningModule):
             continual: If False, reset model between tasks (fully TTA)
             update_auxiliary: Whether to update auxiliary model parameters
             update_task_norm_only: If True, only update norm layers in task model
-            tta_step: Number of adaptation steps per batch
             forward_mode: Forward mode for combined model
             log_aux_metrics: Whether to log auxiliary metrics (loss_top_i, auc, etc.)
+            num_classes: Number of classes for accuracy metrics
         """
         super().__init__()
         
@@ -46,14 +49,16 @@ class DUSATTAModule(pl.LightningModule):
         self.continual = continual
         self.update_auxiliary = update_auxiliary
         self.update_task_norm_only = update_task_norm_only
-        self.tta_step = tta_step
         self.forward_mode = forward_mode
         self.log_aux_metrics = log_aux_metrics
         
-        # Metrics accumulation
-        self.total_correct_top1 = 0.0
-        self.total_correct_top5 = 0.0
-        self.total_samples = 0.0
+        # Current task info (set by callback)
+        self.current_task_name = "unknown"
+        self.current_task_idx = 0
+        
+        # TorchMetrics for cumulative accuracy (automatically handles accumulation)
+        self.train_acc_top1 = Accuracy(task="multiclass", num_classes=num_classes, top_k=1)
+        self.train_acc_top5 = Accuracy(task="multiclass", num_classes=num_classes, top_k=5)
         
         # Save initial model state for reset
         self.save_hyperparameters(ignore=["model"])
@@ -61,6 +66,11 @@ class DUSATTAModule(pl.LightningModule):
         
         # Configure model training mode
         self._configure_model()
+    
+    def _reset_metrics(self):
+        """Reset accumulated metrics for a new task."""
+        self.train_acc_top1.reset()
+        self.train_acc_top5.reset()
     
     def _configure_model(self):
         """Configure which parameters to update."""
@@ -73,24 +83,34 @@ class DUSATTAModule(pl.LightningModule):
         if self.update_auxiliary:
             self.model.set_auxiliary_train_mode(update_flow=True)
     
-    def on_fit_start(self):
-        """Save initial model state before TTA."""
+    def save_initial_state(self):
+        """Manually save initial model state before TTA begins."""
         self.initial_model_state = deepcopy(self.model.get_model_state())
+    
+    def on_fit_start(self):
+        """Save initial model state before TTA (only if not already saved)."""
+        if self.initial_model_state is None:
+            self.save_initial_state()
     
     def reset_model(self):
         """Reset model to initial state (for fully TTA mode)."""
         if self.initial_model_state is not None:
             self.model.load_model_state(self.initial_model_state)
+            self._configure_model()  # Re-configure training mode after reset
             self.print(f"Model reset to initial state")
     
-    def forward(self, batch: Dict[str, Any], batch_idx: int, task_info: Optional[Dict] = None):
+    def set_task_info(self, task_name: str, task_idx: int):
+        """Set current task information for logging."""
+        self.current_task_name = task_name
+        self.current_task_idx = task_idx
+    
+    def forward(self, batch: Dict[str, Any], batch_idx: int):
         """
         Forward pass for TTA.
         
         Args:
             batch: Dict with "task_images", "raw_images", "labels"
             batch_idx: Batch index
-            task_info: Optional dict with task metadata (task_name, step, all_steps)
         
         Returns:
             logits: Predictions (B, num_classes)
@@ -102,8 +122,11 @@ class DUSATTAModule(pl.LightningModule):
         labels = batch["labels"]
         
         # Prepare batch infos for auxiliary model
-        batch_infos = task_info or {}
-        batch_infos["step"] = batch_idx
+        batch_infos = {
+            "task_name": self.current_task_name,
+            "task_idx": self.current_task_idx,
+            "step": batch_idx,
+        }
         
         # Forward pass
         logits, features, loss_with_metrics = self.model(
@@ -136,69 +159,37 @@ class DUSATTAModule(pl.LightningModule):
     
     def training_step(self, batch, batch_idx):
         """
-        TTA step (not traditional training).
-        Note: We use training_step for TTA adaptation, even though it's test-time.
+        TTA step using automatic optimization.
+        Supports gradient accumulation via trainer config.
         """
-        # Get task info from trainer's current task
-        task_info = getattr(self.trainer, "current_task_info", {})
+        # Forward pass
+        logits, loss, metrics = self(batch, batch_idx)
+        labels = batch["labels"]
         
-        # Multiple TTA steps per batch if configured
-        for step_i in range(self.tta_step):
-            logits, loss, metrics = self(batch, batch_idx, task_info)
-            
-            # Only optimize if we have auxiliary loss
-            if loss is not None:
-                # Manual optimization (Lightning automatic optimization disabled)
-                if not self.automatic_optimization:
-                    # Manual backward and optimizer step
-                    opt = self.optimizers()
-                    opt.zero_grad()
-                    self.manual_backward(loss)
-                    opt.step()
+        # Update TorchMetrics (automatically accumulates)
+        self.train_acc_top1.update(logits, labels)
+        self.train_acc_top5.update(logits, labels)
         
-        # Update cumulative metrics
-        batch_size = batch["labels"].size(0)
-        self.total_samples += batch_size
-        self.total_correct_top1 += metrics["top1"] * batch_size / 100.0
-        self.total_correct_top5 += metrics["top5"] * batch_size / 100.0
+        # Get cumulative accuracy (TorchMetrics handles the math)
+        avg_top1 = self.train_acc_top1.compute() * 100.0
+        avg_top5 = self.train_acc_top5.compute() * 100.0
         
-        avg_top1 = self.total_correct_top1 / self.total_samples * 100.0
-        avg_top5 = self.total_correct_top5 / self.total_samples * 100.0
+        # Log metrics with task-specific names to avoid overwriting
+        # Progress bar: only show loss and avg_top1 (without task prefix for readability)
+        self.log("loss", metrics["loss"], on_step=True, on_epoch=False, prog_bar=True)
+        self.log("avg_top1", avg_top1, on_step=True, on_epoch=False, prog_bar=True)
         
-        # Add average metrics to log
-        metrics["avg_top1"] = avg_top1
-        metrics["avg_top5"] = avg_top5
-
-        # Log metrics with selective progress bar display
-        prog_bar_metrics = {}
-        other_metrics = {}
+        # Logger: use task-specific prefix to avoid overwriting across tasks
+        task_prefix = f"task_{self.current_task_idx:02d}"
+        self.log(f"{task_prefix}/loss", metrics["loss"], on_step=True, on_epoch=False, prog_bar=False)
+        self.log(f"{task_prefix}/avg_top1", avg_top1, on_step=True, on_epoch=False, prog_bar=False)
+        self.log(f"{task_prefix}/avg_top5", avg_top5, on_step=True, on_epoch=False, prog_bar=False)
         
-        for k, v in metrics.items():
-            key = f"train/{k}"
-            if k in ["loss", "avg_top1"]:
-                prog_bar_metrics[key] = v
-            else:
-                other_metrics[key] = v
-        
-        # Log progress bar metrics
-        if prog_bar_metrics:
-            self.log_dict(
-                prog_bar_metrics,
-                on_step=True,
-                on_epoch=True,
-                prog_bar=True,
-                logger=True,
-            )
-        
-        # Log other metrics
-        if other_metrics:
-            self.log_dict(
-                other_metrics,
-                on_step=True,
-                on_epoch=True,
-                prog_bar=False,
-                logger=True,
-            )
+        # Log auxiliary metrics if enabled
+        if self.log_aux_metrics:
+            aux_keys = [k for k in metrics.keys() if k not in ["loss", "top1", "top5"]]
+            for k in aux_keys:
+                self.log(f"{task_prefix}/aux/{k}", metrics[k], on_step=False, on_epoch=True, prog_bar=False)
         
         return loss
     
@@ -208,23 +199,20 @@ class DUSATTAModule(pl.LightningModule):
         labels = batch["labels"]
         
         # Forward without auxiliary (no adaptation)
-        logits, _, _ = self.model(
-            images=task_images,
-            raw_images=None,
-            mode="logits",
-        )
+        with torch.no_grad():
+            logits, _, _ = self.model(
+                images=task_images,
+                raw_images=None,
+                mode="logits",
+            )
         
         # Calculate accuracy
         metrics = calculate_accuracy(logits, labels, topk=(1, 5))
         
         # Log metrics
-        self.log_dict(
-            {f"val/{k}": v for k, v in metrics.items()},
-            on_step=False,
-            on_epoch=True,
-            prog_bar=True,
-            logger=True,
-        )
+        task_prefix = f"task_{self.current_task_idx:02d}"
+        self.log(f"{task_prefix}/val_top1", metrics["top1"], on_step=False, on_epoch=True, prog_bar=True)
+        self.log(f"{task_prefix}/val_top5", metrics["top5"], on_step=False, on_epoch=True, prog_bar=False)
         
         return metrics
     
@@ -234,23 +222,20 @@ class DUSATTAModule(pl.LightningModule):
         labels = batch["labels"]
         
         # Forward without auxiliary
-        logits, _, _ = self.model(
-            images=task_images,
-            raw_images=None,
-            mode="logits",
-        )
+        with torch.no_grad():
+            logits, _, _ = self.model(
+                images=task_images,
+                raw_images=None,
+                mode="logits",
+            )
         
         # Calculate accuracy
         metrics = calculate_accuracy(logits, labels, topk=(1, 5))
         
         # Log metrics
-        self.log_dict(
-            {f"test/{k}": v for k, v in metrics.items()},
-            on_step=False,
-            on_epoch=True,
-            prog_bar=True,
-            logger=True,
-        )
+        task_prefix = f"task_{self.current_task_idx:02d}"
+        self.log(f"{task_prefix}/test_top1", metrics["top1"], on_step=False, on_epoch=True, prog_bar=True)
+        self.log(f"{task_prefix}/test_top5", metrics["top5"], on_step=False, on_epoch=True, prog_bar=False)
         
         return metrics
     
@@ -275,14 +260,28 @@ class DUSATTAModule(pl.LightningModule):
         return optimizer
     
     def on_train_epoch_start(self):
-        """Called at the start of each task (epoch in our case)."""
-        # Reset metrics
-        self.total_correct_top1 = 0.0
-        self.total_correct_top5 = 0.0
-        self.total_samples = 0.0
-
-        # Reset model if not continual
-        if not self.continual and self.current_epoch > 0:
-            self.reset_model()
-            # Reconfigure optimizer after reset
-            self.trainer.strategy.setup_optimizers(self.trainer)
+        """Called at the start of each task (epoch)."""
+        # Reset metrics for new task
+        self._reset_metrics()
+    
+    def on_train_epoch_end(self):
+        """Called at the end of each task (epoch). Log final metrics."""
+        # Get final cumulative accuracy from TorchMetrics
+        final_avg_top1 = self.train_acc_top1.compute() * 100.0
+        final_avg_top5 = self.train_acc_top5.compute() * 100.0
+        
+        # Log final task accuracy with task-specific prefix
+        task_prefix = f"task_{self.current_task_idx:02d}"
+        self.log(f"{task_prefix}/final_top1", final_avg_top1, on_step=False, on_epoch=True, prog_bar=False)
+        self.log(f"{task_prefix}/final_top5", final_avg_top5, on_step=False, on_epoch=True, prog_bar=False)
+        
+        # Print task summary
+        self.print(f"\nTask '{self.current_task_name}' completed: "
+                  f"Avg Top-1={final_avg_top1:.2f}%, Avg Top-5={final_avg_top5:.2f}%")
+    
+    def get_final_accuracy(self) -> Dict[str, float]:
+        """Get final accuracy for current task."""
+        return {
+            "top1": self.train_acc_top1.compute().item() * 100.0,
+            "top5": self.train_acc_top5.compute().item() * 100.0,
+        }
