@@ -11,6 +11,7 @@ severities: [5]
 
 # DataLoader settings
 batch_size: 8
+shuffle: true
 num_workers: 4
 pin_memory: true
 persistent_workers: true

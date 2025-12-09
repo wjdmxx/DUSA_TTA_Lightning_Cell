@@ -1,4 +1,5 @@
 """Data transforms for task and auxiliary models."""
+
 import torch
 import torchvision.transforms as T
 from torchvision.transforms import functional as F
@@ -10,7 +11,7 @@ class TaskTransform:
     Transforms for discriminative task model.
     Standard ImageNet preprocessing: center crop 224, normalize.
     """
-    
+
     def __init__(
         self,
         input_size: int = 224,
@@ -20,19 +21,21 @@ class TaskTransform:
         self.input_size = input_size
         self.mean = mean
         self.std = std
-        
-        self.transform = T.Compose([
-            T.Resize(256),
-            T.CenterCrop(input_size),
-            T.ToTensor(),
-            T.Normalize(mean=mean, std=std),
-        ])
-    
+
+        self.transform = T.Compose(
+            [
+                # T.Resize(256),
+                T.CenterCrop(input_size),
+                T.ToTensor(),
+                T.Normalize(mean=mean, std=std),
+            ]
+        )
+
     def __call__(self, image):
         """
         Args:
             image: PIL Image or tensor
-        
+
         Returns:
             Preprocessed tensor (3, 224, 224)
         """
@@ -44,15 +47,15 @@ class RawImageCollector:
     Keeps raw images (before task preprocessing) for auxiliary model.
     Auxiliary model needs BGR [0, 255] format.
     """
-    
+
     def __init__(self):
         self.to_tensor = T.ToTensor()
-    
+
     def __call__(self, image):
         """
         Args:
             image: PIL Image (RGB)
-        
+
         Returns:
             Tensor (3, H, W) in RGB [0, 255]
         """
@@ -70,7 +73,7 @@ def create_tta_transforms(
 ):
     """
     Create transforms for TTA.
-    
+
     Returns:
         task_transform: Transform for task model
         raw_transform: Transform to keep raw images for auxiliary model
@@ -80,21 +83,21 @@ def create_tta_transforms(
         mean=task_mean,
         std=task_std,
     )
-    
+
     raw_transform = RawImageCollector()
-    
+
     return task_transform, raw_transform
 
 
 def dual_transform(image, task_transform, raw_transform):
     """
     Apply both task and raw transforms to an image.
-    
+
     Args:
         image: PIL Image
         task_transform: Transform for task model
         raw_transform: Transform for raw image
-    
+
     Returns:
         task_image: Preprocessed for task model (3, 224, 224)
         raw_image: Raw image for auxiliary model (3, H, W) in BGR [0, 255]
