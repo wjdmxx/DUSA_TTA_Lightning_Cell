@@ -27,3 +27,11 @@ generative:
   time_sampler_kwargs:
     t_min: 0.25
     t_max: 0.25
+  
+  # Adaptive loss weighting settings
+  adaptive_loss_weight: false  # Enable adaptive sample-level loss weighting based on gap_norm
+  adaptive_warmup_steps: 100   # Number of warmup steps before adaptive weighting kicks in
+  adaptive_ema_decay: 0.99     # EMA decay factor for gap_norm tracking
+  adaptive_weight_min: 0.5     # Minimum sample weight
+  adaptive_weight_max: 1.5     # Maximum sample weight
+  adaptive_gap_norm_std: 0.9   # Estimated std of gap_norm for scaling
