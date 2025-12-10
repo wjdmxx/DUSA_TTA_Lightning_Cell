@@ -2,7 +2,7 @@
 root: "${data_root}"
 
 # Corruptions to test (null = all 19 corruptions)
-corruptions: null
+corruptions: ["gaussian_noise", "shot_noise", "impulse_noise", "defocus_blur", "glass_blur", "motion_blur", "zoom_blur", "snow", "frost", "fog", "brightness", "contrast", "elastic_transform", "pixelate", "jpeg_compression"]
 # Example: ["gaussian_noise", "glass_blur", "fog"]
 
 # Severities to test (null = all 5 severities)
