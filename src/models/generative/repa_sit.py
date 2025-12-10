@@ -693,7 +693,11 @@ class REPASiT(nn.Module):
 
         # Compute auxiliary metrics (no grad needed for metrics computation)
         with torch.no_grad():
-            aux_losses = self._compute_aux_metrics(model_out, target, prob_as_coeff, K)
+            # Get discriminative scores for selected classes
+            selected_ori_logits = torch.gather(ori_logits, 1, forward_idx)  # (B, K)
+            aux_losses = self._compute_aux_metrics(
+                model_out, target, prob_as_coeff, K, selected_ori_logits
+            )
 
         # Compute sample weights for adaptive loss (no grad needed)
         sample_weights = None
@@ -760,14 +764,71 @@ class REPASiT(nn.Module):
 
         return norm_l2
 
+    def _compute_weighted_kendall(
+        self,
+        scores_d: torch.Tensor,
+        scores_g: torch.Tensor,
+        eps: float = 1e-8,
+    ) -> torch.Tensor:
+        """
+        Compute weighted Kendall tau consistency between discriminative and generative scores.
+
+        Measures rank correlation between discriminative model logits and generative model
+        scores (negative loss). Higher values indicate better agreement between the two models.
+
+        Args:
+            scores_d: (B, K) discriminative model scores (original logits for selected classes)
+            scores_g: (B, K) generative model scores (negative per-class loss)
+            eps: small constant for numerical stability
+
+        Returns:
+            tau_w: scalar weighted Kendall tau in [-1, 1], averaged over batch
+        """
+        B, K = scores_d.shape
+
+        # Compute pairwise differences within each sample
+        # diff_d[b, i, j] = scores_d[b, i] - scores_d[b, j]
+        diff_d = scores_d.unsqueeze(2) - scores_d.unsqueeze(1)  # (B, K, K)
+        diff_g = scores_g.unsqueeze(2) - scores_g.unsqueeze(1)  # (B, K, K)
+
+        # Sign product: concordant (+1), discordant (-1), or tie (0)
+        sign_prod = torch.sign(diff_d) * torch.sign(diff_g)  # (B, K, K)
+
+        # Masks for concordant and discordant pairs (excluding ties)
+        mask_conc = (sign_prod > 0).float()  # (B, K, K)
+        mask_disc = (sign_prod < 0).float()  # (B, K, K)
+
+        # Margin-based weights: sqrt(|diff_d| * |diff_g|)
+        w = (diff_d.abs() * diff_g.abs()).sqrt()  # (B, K, K)
+
+        # Weighted concordant and discordant counts per sample
+        C = (w * mask_conc).sum(dim=(1, 2))  # (B,)
+        D = (w * mask_disc).sum(dim=(1, 2))  # (B,)
+
+        # Per-sample Kendall tau
+        tau_w_per_sample = (C - D) / (C + D + eps)  # (B,)
+
+        # Return batch mean
+        return tau_w_per_sample
+
     def _compute_aux_metrics(
         self,
         model_out: torch.Tensor,
         target: torch.Tensor,
         prob_as_coeff: torch.Tensor,
         K: int,
+        selected_ori_logits: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
-        """Compute auxiliary metrics (per-class losses, AUC, gap norm)."""
+        """
+        Compute auxiliary metrics (per-class losses, AUC, gap norm, Kendall tau).
+
+        Args:
+            model_out: (B, K, C, H, W) model outputs for K selected classes
+            target: (B, C, H, W) target velocity
+            prob_as_coeff: (B, K) probability coefficients
+            K: number of selected classes (topk + rand_budget)
+            selected_ori_logits: (B, K) original logits for selected classes
+        """
         # Per-class MSE
         per_pixel_mse = F.mse_loss(
             model_out,
@@ -808,6 +869,14 @@ class REPASiT(nn.Module):
         # Store both sample-level and batch-level gap_norm
         aux_losses["sample_gap_norm"] = sample_gap_norm  # (B,) for adaptive weighting
         aux_losses["gap_norm"] = sample_gap_norm.mean()  # scalar for logging
+
+        # Kendall tau consistency between discriminative and generative scores
+        sample_kendall_tau = self._compute_weighted_kendall(
+            scores_d=selected_ori_logits,  # (B, K) discriminative scores
+            scores_g=-per_class_loss,  # (B, K) generative scores (negative loss)
+        )
+        aux_losses["sample_kendall_tau"] = sample_kendall_tau
+        aux_losses["kendall_tau"] = sample_kendall_tau.mean()
 
         return aux_losses
 
