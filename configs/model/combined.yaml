@@ -4,6 +4,14 @@ discriminative:
   pretrained: true
   checkpoint_path: null  # Set to custom checkpoint path if needed
   num_classes: 1000
+  use_pixel_adapter: true
+  pixel_adapter_config:
+    type: "standard"
+    in_channels: 3
+    hidden_channels: 32
+    num_blocks: 2
+    max_scale: 0.15
+    use_spatial_attention: true
 
 # Generative model: REPA SiT
 generative:

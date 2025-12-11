@@ -117,10 +117,12 @@ class CombinedModel(nn.Module):
     def set_task_train_mode(
         self,
         update_norm_only: bool = True,
+        update_pixel_adapter: bool = True,
     ):
         """Configure task model training mode."""
         self.task_model.set_train_mode(
             update_norm_only=update_norm_only,
+            update_pixel_adapter=update_pixel_adapter,
         )
     
     def set_auxiliary_train_mode(self, update_flow: bool = True):

@@ -2,11 +2,13 @@
 import torch
 import torch.nn as nn
 import timm
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any
+
+from .pixel_adapter import PixelTTAAdapter, PixelTTAAdapterLight, create_pixel_adapter
 
 
 class TimmClassifier(nn.Module):
-    """Wrapper for timm models with feature extraction support."""
+    """Wrapper for timm models with feature extraction support and optional pixel adapter."""
     
     def __init__(
         self,
@@ -14,6 +16,9 @@ class TimmClassifier(nn.Module):
         pretrained: bool = True,
         num_classes: int = 1000,
         checkpoint_path: Optional[str] = None,
+        # Pixel adapter config
+        use_pixel_adapter: bool = False,
+        pixel_adapter_config: Optional[Dict[str, Any]] = None,
     ):
         """
         Args:
@@ -48,6 +53,21 @@ class TimmClassifier(nn.Module):
         # Get model info for feature extraction
         self.feature_info = self.model.feature_info if hasattr(self.model, "feature_info") else None
         
+        # Pixel-level TTA adapter (optional)
+        self.use_pixel_adapter = use_pixel_adapter
+        self.pixel_adapter = None
+        if use_pixel_adapter:
+            adapter_cfg = pixel_adapter_config or {}
+            self.pixel_adapter = create_pixel_adapter(
+                adapter_type=adapter_cfg.get("type", "standard"),
+                in_channels=adapter_cfg.get("in_channels", 3),
+                hidden_channels=adapter_cfg.get("hidden_channels", 32),
+                num_blocks=adapter_cfg.get("num_blocks", 2),
+                max_scale=adapter_cfg.get("max_scale", 0.15),
+                use_spatial_attention=adapter_cfg.get("use_spatial_attention", True),
+            )
+            print(f"Pixel TTA Adapter enabled: {type(self.pixel_adapter).__name__}")
+        
     def forward(
         self,
         x: torch.Tensor,
@@ -64,6 +84,10 @@ class TimmClassifier(nn.Module):
             logits: (B, num_classes)
             features: (B, feature_dim) or None
         """
+        # Apply pixel adapter if enabled (learns input-space perturbations)
+        if self.pixel_adapter is not None:
+            x = self.pixel_adapter(x)
+        
         if return_features:
             # Extract pre-logits features (before final classifier)
             features = self.model.forward_features(x)
@@ -111,35 +135,53 @@ class TimmClassifier(nn.Module):
     def set_train_mode(
         self,
         update_norm_only: bool = True,
+        update_pixel_adapter: bool = True,
     ):
         """
         Configure which parameters to update during TTA.
         
         Args:
-            update_all: If True, make all parameters trainable
-            update_norm_only: If True, only update normalization layers (BN, LN, GN)
+            update_norm_only: If True, only update normalization layers (BN, LN, GN) in backbone
+            update_pixel_adapter: If True, update pixel adapter parameters
         """
         if not update_norm_only:
             self.model.requires_grad_(True)
-            return
+        else:
+            # Freeze all parameters in backbone
+            self.model.requires_grad_(False)
+            
+            # Only update normalization layers in backbone
+            for name, module in self.model.named_modules():
+                if isinstance(module, (
+                    nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d,
+                    nn.LayerNorm, nn.GroupNorm, nn.InstanceNorm1d,
+                    nn.InstanceNorm2d, nn.InstanceNorm3d
+                )):
+                    module.requires_grad_(True)
+                    # For BN: use only current batch statistics
+                    if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+                        if hasattr(module, "track_running_stats"):
+                            module.track_running_stats = False
+                            module.running_mean = None
+                            module.running_var = None
         
-        # Freeze all parameters
-        self.model.requires_grad_(False)
-        
-        # Only update normalization layers
-        for name, module in self.model.named_modules():
-            if isinstance(module, (
-                nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d,
-                nn.LayerNorm, nn.GroupNorm, nn.InstanceNorm1d,
-                nn.InstanceNorm2d, nn.InstanceNorm3d
-            )):
-                module.requires_grad_(True)
-                # For BN: use only current batch statistics
-                if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
-                    if hasattr(module, "track_running_stats"):
-                        module.track_running_stats = False
-                        module.running_mean = None
-                        module.running_var = None
+        # Pixel adapter is always trainable if enabled and update_pixel_adapter is True
+        if self.pixel_adapter is not None:
+            self.pixel_adapter.requires_grad_(update_pixel_adapter)
+            if update_pixel_adapter:
+                print(f"Pixel adapter parameters are trainable")
+    
+    def get_pixel_adapter_stats(self, x: torch.Tensor) -> Optional[Dict[str, float]]:
+        """Get pixel adapter perturbation statistics for monitoring."""
+        if self.pixel_adapter is not None and hasattr(self.pixel_adapter, 'get_perturbation_stats'):
+            return self.pixel_adapter.get_perturbation_stats(x)
+        return None
+    
+    def get_pixel_adapter_scale(self) -> Optional[float]:
+        """Get current effective scale of pixel adapter."""
+        if self.pixel_adapter is not None:
+            return self.pixel_adapter.get_effective_scale().item()
+        return None
 
 
 def create_convnext_large(
@@ -161,11 +203,15 @@ def create_classifier(
     pretrained: bool = True,
     checkpoint_path: Optional[str] = None,
     num_classes: int = 1000,
+    use_pixel_adapter: bool = False,
+    pixel_adapter_config: Optional[Dict[str, Any]] = None,
 ) -> TimmClassifier:
-    """Factory function to create any timm classifier."""
+    """Factory function to create any timm classifier with optional pixel adapter."""
     return TimmClassifier(
         model_name=model_name,
         pretrained=pretrained,
         num_classes=num_classes,
         checkpoint_path=checkpoint_path,
+        use_pixel_adapter=use_pixel_adapter,
+        pixel_adapter_config=pixel_adapter_config,
     )

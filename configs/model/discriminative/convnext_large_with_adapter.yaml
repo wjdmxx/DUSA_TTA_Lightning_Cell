@@ -1,0 +1,30 @@
+# ConvNeXt-Large with Pixel TTA Adapter
+# 在分类器前添加像素级适配器，学习输入空间的TTA偏移
+
+model_name: "convnext_large"
+pretrained: true
+checkpoint_path: null
+num_classes: 1000
+
+# Pixel Adapter Configuration
+use_pixel_adapter: true
+pixel_adapter_config:
+  # "standard" (推荐) 或 "light" (更轻量)
+  type: "standard"
+  
+  # 输入通道数 (RGB=3)
+  in_channels: 3
+  
+  # 隐藏层通道数，越大容量越大
+  hidden_channels: 32
+  
+  # 残差块数量
+  num_blocks: 2
+  
+  # 最大残差缩放系数 (控制最大影响程度)
+  # 0.15 表示最多改变像素值的15%
+  # 初始为0，逐渐学习
+  max_scale: 0.15
+  
+  # 是否使用空间注意力
+  use_spatial_attention: true

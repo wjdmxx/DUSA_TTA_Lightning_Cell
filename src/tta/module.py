@@ -25,6 +25,7 @@ class DUSATTAModule(pl.LightningModule):
         continual: bool = False,
         update_auxiliary: bool = True,
         update_task_norm_only: bool = True,
+        update_pixel_adapter: bool = True,
         forward_mode: str = "normed_logits_with_logits",
         log_aux_metrics: bool = False,
         num_classes: int = 1000,
@@ -37,6 +38,7 @@ class DUSATTAModule(pl.LightningModule):
             continual: If False, reset model between tasks (fully TTA)
             update_auxiliary: Whether to update auxiliary model parameters
             update_task_norm_only: If True, only update norm layers in task model
+            update_pixel_adapter: If True, update pixel adapter parameters (if present)
             forward_mode: Forward mode for combined model
             log_aux_metrics: Whether to log auxiliary metrics (loss_top_i, auc, etc.)
             num_classes: Number of classes for accuracy metrics
@@ -49,6 +51,7 @@ class DUSATTAModule(pl.LightningModule):
         self.continual = continual
         self.update_auxiliary = update_auxiliary
         self.update_task_norm_only = update_task_norm_only
+        self.update_pixel_adapter = update_pixel_adapter
         self.forward_mode = forward_mode
         self.log_aux_metrics = log_aux_metrics
         
@@ -77,6 +80,7 @@ class DUSATTAModule(pl.LightningModule):
         # Set task model training mode
         self.model.set_task_train_mode(
             update_norm_only=self.update_task_norm_only,
+            update_pixel_adapter=self.update_pixel_adapter,
         )
         
         # Set auxiliary model training mode
