@@ -1,7 +1,7 @@
 # Main configuration file
 defaults:
-  - model: combined
-  - data: imagenet_c
+  - model: combined_vit_patch16
+  - data: imagenet_c_vit
   - trainer: default
   - experiment: null  # Override with experiment configs
   - _self_
@@ -12,7 +12,8 @@ data_root: "/mnt/bit/data/imagenet-c/"  # UPDATE THIS
 
 # Experiment settings
 seed: 42
-experiment_name: "4e-5_pixel_adapter_scale_0.15"
+experiment_name: "ViT_patch16_1e-5_pixel_adapter_scale_0.15"
+# experiment_name: "ViT_patch16_4e-5_base"
 
 # TTA settings
 tta:
@@ -25,7 +26,7 @@ tta:
 
 # Optimizer settings
 optimizer:
-  learning_rate: 4e-5
+  learning_rate: 1e-5
   weight_decay: 0.0
 
 # Logging

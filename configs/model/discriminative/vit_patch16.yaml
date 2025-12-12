@@ -1,0 +1,8 @@
+# ViT-Base/16 discriminative model only
+discriminative:
+  model_name: "vit_base_patch16_224.augreg_in1k"
+  pretrained: true
+  checkpoint_path: null
+  num_classes: 1000
+
+generative: null  # No auxiliary model

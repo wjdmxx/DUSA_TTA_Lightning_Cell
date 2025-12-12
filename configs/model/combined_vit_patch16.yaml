@@ -1,0 +1,46 @@
+# Discriminative model: ConvNeXt-Large
+discriminative:
+  model_name: "vit_base_patch16_224.augreg_in1k"
+  pretrained: true
+  checkpoint_path: null
+  num_classes: 1000
+  use_pixel_adapter: true
+  pixel_adapter_config:
+    type: "standard"
+    in_channels: 3
+    hidden_channels: 32
+    num_blocks: 2
+    max_scale: 0.15
+    use_spatial_attention: true
+
+# Generative model: REPA SiT
+generative:
+  sit_model_name: "SiT-XL/2"  # SiT-XL/2 or SiT-B/2
+  sit_checkpoint: "/mnt/bit/liyuanxi/projects/DUSA_flow/classification/pretrained_models/REPA-SiT-XL-2-256.pt"  # UPDATE THIS
+  num_classes: 1000
+  
+  # VAE settings
+  vae_pretrained: "stabilityai/sd-vae-ft-ema"
+  vae_scaling_factor: 0.18215
+  
+  # Loss settings
+  topk: 4
+  rand_budget: 2
+  temperature: 1.0
+  sample_reverse_logits: false
+  
+  # Scheduler settings
+  scheduler_type: "linear"  # linear or reverse_linear
+  time_sampler_type: "uniform"
+  time_sampler_kwargs:
+    t_min: 0.25
+    t_max: 0.25
+  
+  # Adaptive loss weighting settings
+  adaptive_loss_weight: false  # Enable adaptive sample-level loss weighting based on gap_norm
+  adaptive_only_positive: false # Only use positive gap_norm for weighting, range in [1, max]
+  adaptive_warmup_steps: 100   # Number of warmup steps before adaptive weighting kicks in
+  adaptive_ema_decay: 0.99     # EMA decay factor for gap_norm tracking
+  adaptive_weight_min: 0.8     # Minimum sample weight
+  adaptive_weight_max: 1.5     # Maximum sample weight
+  adaptive_gap_norm_std: 0.9   # Estimated std of gap_norm for scaling

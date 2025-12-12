@@ -1,0 +1,22 @@
+# ImageNet-C dataset configuration
+root: "${data_root}"
+
+# Corruptions to test (null = all 19 corruptions)
+corruptions: ["gaussian_noise", "shot_noise", "impulse_noise", "defocus_blur", "glass_blur", "motion_blur", "zoom_blur", "snow", "frost", "fog", "brightness", "contrast", "elastic_transform", "pixelate", "jpeg_compression"]
+# Example: ["gaussian_noise", "glass_blur", "fog"]
+
+# Severities to test (null = all 5 severities)
+severities: [5]
+# Example: [3, 4, 5]
+
+# DataLoader settings
+batch_size: 8
+shuffle: true
+num_workers: 4
+pin_memory: true
+persistent_workers: true
+
+# Transform settings
+task_input_size: 224
+task_mean: [0.50, 0.50, 0.50]  # ViT use 0.5 mean
+task_std: [0.50, 0.50, 0.50]  # ViT use 0.5 std
