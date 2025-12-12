@@ -4,5 +4,9 @@ discriminative:
   pretrained: true
   checkpoint_path: null
   num_classes: 1000
+  # Normalization settings (applied in model forward)
+  normalize_mean: [0.50, 0.50, 0.50]  # ViT uses 0.5 mean
+  normalize_std: [0.50, 0.50, 0.50]   # ViT uses 0.5 std
 
 generative: null  # No auxiliary model
+pixel_adapter: null  # No pixel adapter

@@ -30,21 +30,18 @@ class ImageNetCDataset(Dataset):
         corruption: str,
         severity: int,
         transform=None,
-        raw_transform=None,
     ):
         """
         Args:
             root: Path to ImageNet-C directory (contains corruption folders)
             corruption: Corruption type (e.g., "gaussian_noise")
             severity: Severity level (1-5)
-            transform: Transform for task model
-            raw_transform: Transform for raw images (auxiliary model)
+            transform: Transform that outputs [0, 1] tensor
         """
         self.root = Path(root)
         self.corruption = corruption
         self.severity = severity
         self.transform = transform
-        self.raw_transform = raw_transform
         
         # Build image list
         corruption_dir = self.root / corruption / str(severity)
@@ -76,13 +73,11 @@ class ImageNetCDataset(Dataset):
         # Load image
         image = Image.open(img_path).convert("RGB")
         
-        # Apply transforms
-        task_image = self.transform(image) if self.transform else image
-        raw_image = self.raw_transform(image) if self.raw_transform else None
+        # Apply transform: outputs [0, 1] tensor
+        image_tensor = self.transform(image) if self.transform else image
         
         return {
-            "task_image": task_image,
-            "raw_image": raw_image,
+            "image": image_tensor,
             "label": label,
             "image_path": str(img_path),
         }
@@ -92,8 +87,7 @@ def create_imagenet_c_tasks(
     root: str,
     corruptions: Optional[List[str]] = None,
     severities: Optional[List[int]] = None,
-    task_transform=None,
-    raw_transform=None,
+    transform=None,
 ) -> List[Tuple[str, Dataset]]:
     """
     Create list of ImageNet-C task datasets.
@@ -102,8 +96,7 @@ def create_imagenet_c_tasks(
         root: Path to ImageNet-C directory
         corruptions: List of corruptions to use (None = all)
         severities: List of severities to use (None = all)
-        task_transform: Transform for task model
-        raw_transform: Transform for raw images
+        transform: Transform that outputs [0, 1] tensor
     
     Returns:
         List of (task_name, dataset) tuples
@@ -122,8 +115,7 @@ def create_imagenet_c_tasks(
                     root=root,
                     corruption=corruption,
                     severity=severity,
-                    transform=task_transform,
-                    raw_transform=raw_transform,
+                    transform=transform,
                 )
                 tasks.append((task_name, dataset))
             except ValueError as e:
@@ -135,16 +127,14 @@ def create_imagenet_c_tasks(
 def custom_collate_fn(batch):
     """
     Custom collate function for TTA data.
-    Handles both task images (batched) and raw images (list).
+    Returns batched images in [0, 1] range.
     """
-    task_images = torch.stack([item["task_image"] for item in batch])
-    raw_images = [item["raw_image"] for item in batch]
+    images = torch.stack([item["image"] for item in batch])
     labels = torch.tensor([item["label"] for item in batch])
     image_paths = [item["image_path"] for item in batch]
     
     return {
-        "task_images": task_images,
-        "raw_images": raw_images,
+        "images": images,  # (B, 3, 224, 224) in [0, 1]
         "labels": labels,
         "image_paths": image_paths,
     }

@@ -1,14 +1,16 @@
 """Discriminative models using timm."""
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import timm
-from typing import Tuple, Optional, Dict, Any
-
-from .pixel_adapter import PixelTTAAdapter, PixelTTAAdapterLight, create_pixel_adapter
+from typing import Tuple, Optional, Dict, Any, List
 
 
 class TimmClassifier(nn.Module):
-    """Wrapper for timm models with feature extraction support and optional pixel adapter."""
+    """Wrapper for timm models with feature extraction support.
+    
+    Now receives images in [0, 1] range and does normalization internally.
+    """
     
     def __init__(
         self,
@@ -16,9 +18,9 @@ class TimmClassifier(nn.Module):
         pretrained: bool = True,
         num_classes: int = 1000,
         checkpoint_path: Optional[str] = None,
-        # Pixel adapter config
-        use_pixel_adapter: bool = False,
-        pixel_adapter_config: Optional[Dict[str, Any]] = None,
+        # Normalization config (ImageNet defaults)
+        normalize_mean: Tuple[float, float, float] = (0.485, 0.456, 0.406),
+        normalize_std: Tuple[float, float, float] = (0.229, 0.224, 0.225),
     ):
         """
         Args:
@@ -26,11 +28,23 @@ class TimmClassifier(nn.Module):
             pretrained: Load ImageNet pretrained weights
             num_classes: Number of output classes
             checkpoint_path: Path to custom checkpoint (overrides pretrained)
+            normalize_mean: Mean for normalization (ImageNet default)
+            normalize_std: Std for normalization (ImageNet default)
         """
         super().__init__()
         
         self.model_name = model_name
         self.num_classes = num_classes
+        
+        # Register normalization parameters as buffers (move with model to device)
+        self.register_buffer(
+            'normalize_mean', 
+            torch.tensor(normalize_mean).view(1, 3, 1, 1)
+        )
+        self.register_buffer(
+            'normalize_std', 
+            torch.tensor(normalize_std).view(1, 3, 1, 1)
+        )
         
         # Create model
         self.model = timm.create_model(
@@ -52,21 +66,18 @@ class TimmClassifier(nn.Module):
         
         # Get model info for feature extraction
         self.feature_info = self.model.feature_info if hasattr(self.model, "feature_info") else None
+    
+    def normalize(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Normalize input images.
         
-        # Pixel-level TTA adapter (optional)
-        self.use_pixel_adapter = use_pixel_adapter
-        self.pixel_adapter = None
-        if use_pixel_adapter:
-            adapter_cfg = pixel_adapter_config or {}
-            self.pixel_adapter = create_pixel_adapter(
-                adapter_type=adapter_cfg.get("type", "standard"),
-                in_channels=adapter_cfg.get("in_channels", 3),
-                hidden_channels=adapter_cfg.get("hidden_channels", 32),
-                num_blocks=adapter_cfg.get("num_blocks", 2),
-                max_scale=adapter_cfg.get("max_scale", 0.15),
-                use_spatial_attention=adapter_cfg.get("use_spatial_attention", True),
-            )
-            print(f"Pixel TTA Adapter enabled: {type(self.pixel_adapter).__name__}")
+        Args:
+            x: Input tensor (B, 3, H, W) in [0, 1] range
+            
+        Returns:
+            Normalized tensor with ImageNet mean/std
+        """
+        return (x - self.normalize_mean) / self.normalize_std
         
     def forward(
         self,
@@ -77,16 +88,15 @@ class TimmClassifier(nn.Module):
         Forward pass with optional feature extraction.
         
         Args:
-            x: Input tensor (B, C, H, W)
+            x: Input tensor (B, 3, H, W) in [0, 1] range
             return_features: If True, return (logits, pre_logits_features)
         
         Returns:
             logits: (B, num_classes)
             features: (B, feature_dim) or None
         """
-        # Apply pixel adapter if enabled (learns input-space perturbations)
-        if self.pixel_adapter is not None:
-            x = self.pixel_adapter(x)
+        # Normalize input (expects [0, 1] range)
+        x = self.normalize(x)
         
         if return_features:
             # Extract pre-logits features (before final classifier)
@@ -135,14 +145,12 @@ class TimmClassifier(nn.Module):
     def set_train_mode(
         self,
         update_norm_only: bool = True,
-        update_pixel_adapter: bool = True,
     ):
         """
         Configure which parameters to update during TTA.
         
         Args:
             update_norm_only: If True, only update normalization layers (BN, LN, GN) in backbone
-            update_pixel_adapter: If True, update pixel adapter parameters
         """
         if not update_norm_only:
             self.model.requires_grad_(True)
@@ -164,24 +172,6 @@ class TimmClassifier(nn.Module):
                             module.track_running_stats = False
                             module.running_mean = None
                             module.running_var = None
-        
-        # Pixel adapter is always trainable if enabled and update_pixel_adapter is True
-        if self.pixel_adapter is not None:
-            self.pixel_adapter.requires_grad_(update_pixel_adapter)
-            if update_pixel_adapter:
-                print(f"Pixel adapter parameters are trainable")
-    
-    def get_pixel_adapter_stats(self, x: torch.Tensor) -> Optional[Dict[str, float]]:
-        """Get pixel adapter perturbation statistics for monitoring."""
-        if self.pixel_adapter is not None and hasattr(self.pixel_adapter, 'get_perturbation_stats'):
-            return self.pixel_adapter.get_perturbation_stats(x)
-        return None
-    
-    def get_pixel_adapter_scale(self) -> Optional[float]:
-        """Get current effective scale of pixel adapter."""
-        if self.pixel_adapter is not None:
-            return self.pixel_adapter.get_effective_scale().item()
-        return None
 
 
 def create_convnext_large(
@@ -203,15 +193,18 @@ def create_classifier(
     pretrained: bool = True,
     checkpoint_path: Optional[str] = None,
     num_classes: int = 1000,
+    normalize_mean: Tuple[float, float, float] = (0.485, 0.456, 0.406),
+    normalize_std: Tuple[float, float, float] = (0.229, 0.224, 0.225),
+    # Legacy params (ignored for backward compatibility)
     use_pixel_adapter: bool = False,
     pixel_adapter_config: Optional[Dict[str, Any]] = None,
 ) -> TimmClassifier:
-    """Factory function to create any timm classifier with optional pixel adapter."""
+    """Factory function to create any timm classifier."""
     return TimmClassifier(
         model_name=model_name,
         pretrained=pretrained,
         num_classes=num_classes,
         checkpoint_path=checkpoint_path,
-        use_pixel_adapter=use_pixel_adapter,
-        pixel_adapter_config=pixel_adapter_config,
+        normalize_mean=normalize_mean,
+        normalize_std=normalize_std,
     )

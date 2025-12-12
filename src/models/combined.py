@@ -2,35 +2,45 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, Optional, Dict, List
+from typing import Tuple, Optional, Dict, List, Any
 
 from .discriminative import TimmClassifier
 from .generative import REPASiT
+from .pixel_adapter import create_pixel_adapter
 
 
 class CombinedModel(nn.Module):
     """
     Unified model combining discriminative classifier and generative auxiliary model.
     Implements multiple forward modes for DUSA TTA.
+    
+    Architecture:
+    1. Input: images in [0, 1] range (B, 3, 224, 224)
+    2. Pixel Adapter: learns perturbations, output clamped to [0, 1]
+    3A. Discriminative branch: normalize + classify (gradients flow to adapter)
+    3B. Generative branch: resize to 256, scale to [-1, 1], detach (no gradients to adapter)
     """
     
     def __init__(
         self,
         discriminative_model: TimmClassifier,
         generative_model: Optional[REPASiT] = None,
+        pixel_adapter: Optional[nn.Module] = None,
     ):
         """
         Args:
             discriminative_model: Task classifier (e.g., ConvNeXt from timm)
             generative_model: Auxiliary model (e.g., REPA SiT), optional
+            pixel_adapter: Pixel-level adapter for input perturbations, optional
         """
         super().__init__()
         
         self.task_model = discriminative_model
         self.auxiliary_model = generative_model
+        self.pixel_adapter = pixel_adapter
         
-        # Get feature dimension for potential feature alignment
-        # self.feature_dim = self.task_model.get_feature_dim()
+        if self.pixel_adapter is not None:
+            print(f"Pixel Adapter enabled in CombinedModel: {type(self.pixel_adapter).__name__}")
     
     def task_forward(
         self,
@@ -38,31 +48,34 @@ class CombinedModel(nn.Module):
         return_features: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
-        Forward through task model only.
+        Forward through task model only (with adapter if present).
         
         Args:
-            images: Preprocessed images (B, 3, 224, 224)
+            images: Images in [0, 1] range (B, 3, 224, 224)
             return_features: Whether to return pre-logits features
         
         Returns:
             logits: (B, num_classes)
             features: (B, feature_dim) or None
         """
+        # Apply pixel adapter if present
+        if self.pixel_adapter is not None:
+            images = self.pixel_adapter(images)
+            images = images.clamp(0, 1)
+        
         return self.task_model(images, return_features=return_features)
     
     def forward(
         self,
         images: torch.Tensor,
-        raw_images: Optional[List[torch.Tensor]] = None,
         mode: str = "logits",
         batch_infos: Optional[Dict] = None,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor, Dict]]]:
         """
         Forward pass with multiple modes.
         
         Args:
-            images: Preprocessed images for task model (B, 3, 224, 224)
-            raw_images: Raw images for auxiliary model (list of (3, H, W) in BGR [0, 255])
+            images: Images in [0, 1] range (B, 3, 224, 224)
             mode: Forward mode, one of:
                 - "logits": Return logits only, no auxiliary
                 - "normed_logits": Auxiliary uses L2-normalized logits
@@ -72,25 +85,32 @@ class CombinedModel(nn.Module):
         Returns:
             logits: Task model logits (B, num_classes)
             features: Task model features (B, feature_dim) or None
-            auxiliary_loss: Auxiliary loss (scalar) or None
+            loss_with_metrics: Tuple of (auxiliary_loss, aux_metrics) or None
         """
-        # Get logits and features from task model
-        logits, features = self.task_model(images, return_features=False)
+        # Step 1: Apply pixel adapter (if present)
+        if self.pixel_adapter is not None:
+            adapted_images = self.pixel_adapter(images)
+            adapted_images = adapted_images.clamp(0, 1)
+        else:
+            adapted_images = images
+        
+        # Step 2: Discriminative branch (gradients flow through adapter)
+        logits, features = self.task_model(adapted_images, return_features=False)
         
         # If no auxiliary model or mode is logits-only, return early
         if self.auxiliary_model is None or mode == "logits":
             return logits, features, None
         
-        # Prepare inputs for auxiliary model
-        if raw_images is None:
-            raise ValueError("raw_images required for auxiliary model forward")
+        # Step 3: Generative branch (no gradients to adapter)
+        # Detach adapted images for diffusion branch
+        adapted_images_detached = adapted_images.detach()
         
         # Compute auxiliary loss based on mode
         if mode == "normed_logits":
             # Normalize logits to unit sphere
             normed_logits = F.normalize(logits, p=2, dim=-1)
             auxiliary_loss, aux_metrics = self.auxiliary_model(
-                images=raw_images,
+                images=adapted_images_detached,
                 normed_logits=normed_logits,
                 ori_logits=logits,
                 batch_infos=batch_infos,
@@ -100,7 +120,7 @@ class CombinedModel(nn.Module):
             # DUSA default: use both normalized and original logits
             normed_logits = F.normalize(logits, p=2, dim=-1)
             auxiliary_loss, aux_metrics = self.auxiliary_model(
-                images=raw_images,
+                images=adapted_images_detached,
                 normed_logits=normed_logits,
                 ori_logits=logits,
                 batch_infos=batch_infos,
@@ -119,11 +139,14 @@ class CombinedModel(nn.Module):
         update_norm_only: bool = True,
         update_pixel_adapter: bool = True,
     ):
-        """Configure task model training mode."""
-        self.task_model.set_train_mode(
-            update_norm_only=update_norm_only,
-            update_pixel_adapter=update_pixel_adapter,
-        )
+        """Configure task model and pixel adapter training mode."""
+        self.task_model.set_train_mode(update_norm_only=update_norm_only)
+        
+        # Pixel adapter is trainable if enabled
+        if self.pixel_adapter is not None:
+            self.pixel_adapter.requires_grad_(update_pixel_adapter)
+            if update_pixel_adapter:
+                print(f"Pixel adapter parameters are trainable")
     
     def set_auxiliary_train_mode(self, update_flow: bool = True):
         """Configure auxiliary model training mode."""
@@ -142,6 +165,8 @@ class CombinedModel(nn.Module):
         }
         if self.auxiliary_model is not None:
             state["auxiliary_model"] = self.auxiliary_model.state_dict()
+        if self.pixel_adapter is not None:
+            state["pixel_adapter"] = self.pixel_adapter.state_dict()
         return state
     
     def load_model_state(self, state: Dict[str, torch.Tensor]):
@@ -149,11 +174,26 @@ class CombinedModel(nn.Module):
         self.task_model.load_state_dict(state["task_model"])
         if self.auxiliary_model is not None and "auxiliary_model" in state:
             self.auxiliary_model.load_state_dict(state["auxiliary_model"])
+        if self.pixel_adapter is not None and "pixel_adapter" in state:
+            self.pixel_adapter.load_state_dict(state["pixel_adapter"])
+    
+    def get_pixel_adapter_stats(self, x: torch.Tensor) -> Optional[Dict[str, float]]:
+        """Get pixel adapter perturbation statistics for monitoring."""
+        if self.pixel_adapter is not None and hasattr(self.pixel_adapter, 'get_perturbation_stats'):
+            return self.pixel_adapter.get_perturbation_stats(x)
+        return None
+    
+    def get_pixel_adapter_scale(self) -> Optional[float]:
+        """Get current effective scale of pixel adapter."""
+        if self.pixel_adapter is not None and hasattr(self.pixel_adapter, 'get_effective_scale'):
+            return self.pixel_adapter.get_effective_scale().item()
+        return None
 
 
 def create_combined_model(
     discriminative_config: Dict,
     generative_config: Optional[Dict] = None,
+    pixel_adapter_config: Optional[Dict[str, Any]] = None,
 ) -> CombinedModel:
     """
     Factory function to create combined model from configs.
@@ -165,6 +205,8 @@ def create_combined_model(
                 "pretrained": True,
                 "checkpoint_path": None,
                 "num_classes": 1000,
+                "normalize_mean": [0.485, 0.456, 0.406],
+                "normalize_std": [0.229, 0.224, 0.225],
             }
         generative_config: Config dict for generative model (optional)
             {
@@ -175,6 +217,15 @@ def create_combined_model(
                 "rand_budget": 2,
                 "temperature": 1.0,
                 ...
+            }
+        pixel_adapter_config: Config dict for pixel adapter (optional)
+            {
+                "type": "standard",
+                "in_channels": 3,
+                "hidden_channels": 32,
+                "num_blocks": 2,
+                "max_scale": 0.15,
+                "use_spatial_attention": True,
             }
     
     Returns:
@@ -191,7 +242,20 @@ def create_combined_model(
     if generative_config is not None:
         gen_model = create_repa_sit(**generative_config)
     
+    # Build pixel adapter if config provided
+    pixel_adapter = None
+    if pixel_adapter_config is not None:
+        pixel_adapter = create_pixel_adapter(
+            adapter_type=pixel_adapter_config.get("type", "standard"),
+            in_channels=pixel_adapter_config.get("in_channels", 3),
+            hidden_channels=pixel_adapter_config.get("hidden_channels", 32),
+            num_blocks=pixel_adapter_config.get("num_blocks", 2),
+            max_scale=pixel_adapter_config.get("max_scale", 0.15),
+            use_spatial_attention=pixel_adapter_config.get("use_spatial_attention", True),
+        )
+    
     return CombinedModel(
         discriminative_model=disc_model,
         generative_model=gen_model,
+        pixel_adapter=pixel_adapter,
     )

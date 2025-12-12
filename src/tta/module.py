@@ -113,7 +113,7 @@ class DUSATTAModule(pl.LightningModule):
         Forward pass for TTA.
         
         Args:
-            batch: Dict with "task_images", "raw_images", "labels"
+            batch: Dict with "images" (B, 3, 224, 224) in [0, 1], "labels"
             batch_idx: Batch index
         
         Returns:
@@ -121,8 +121,7 @@ class DUSATTAModule(pl.LightningModule):
             loss: Auxiliary loss (scalar)
             metrics: Dict of metrics
         """
-        task_images = batch["task_images"]
-        raw_images = batch["raw_images"]
+        images = batch["images"]  # (B, 3, 224, 224) in [0, 1]
         labels = batch["labels"]
         
         # Prepare batch infos for auxiliary model
@@ -134,8 +133,7 @@ class DUSATTAModule(pl.LightningModule):
         
         # Forward pass
         logits, features, loss_with_metrics = self.model(
-            images=task_images,
-            raw_images=raw_images,
+            images=images,
             mode=self.forward_mode,
             batch_infos=batch_infos,
         )
@@ -199,14 +197,13 @@ class DUSATTAModule(pl.LightningModule):
     
     def validation_step(self, batch, batch_idx):
         """Validation step (no adaptation, just evaluation)."""
-        task_images = batch["task_images"]
+        images = batch["images"]  # (B, 3, 224, 224) in [0, 1]
         labels = batch["labels"]
         
         # Forward without auxiliary (no adaptation)
         with torch.no_grad():
             logits, _, _ = self.model(
-                images=task_images,
-                raw_images=None,
+                images=images,
                 mode="logits",
             )
         
@@ -222,14 +219,13 @@ class DUSATTAModule(pl.LightningModule):
     
     def test_step(self, batch, batch_idx):
         """Test step (same as validation)."""
-        task_images = batch["task_images"]
+        images = batch["images"]  # (B, 3, 224, 224) in [0, 1]
         labels = batch["labels"]
         
         # Forward without auxiliary
         with torch.no_grad():
             logits, _, _ = self.model(
-                images=task_images,
-                raw_images=None,
+                images=images,
                 mode="logits",
             )
         

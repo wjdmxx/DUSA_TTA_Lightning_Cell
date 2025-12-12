@@ -16,7 +16,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from src.models import create_combined_model
-from src.data import create_imagenet_c_tasks, create_tta_transforms, custom_collate_fn
+from src.data import create_imagenet_c_tasks, create_tta_transform, custom_collate_fn
 from src.tta import DUSATTAModule
 
 
@@ -80,16 +80,24 @@ def create_model(cfg: DictConfig):
         if cfg.model.generative
         else None
     )
+    pixel_adapter_config = (
+        OmegaConf.to_container(cfg.model.pixel_adapter, resolve=True)
+        if cfg.model.get("pixel_adapter")
+        else None
+    )
 
     # Create model
     model = create_combined_model(
         discriminative_config=disc_config,
         generative_config=gen_config,
+        pixel_adapter_config=pixel_adapter_config,
     )
 
     print(f"Discriminative model: {disc_config['model_name']}")
     if gen_config:
         print(f"Generative model: {gen_config['sit_model_name']}")
+    if pixel_adapter_config:
+        print(f"Pixel Adapter: {pixel_adapter_config.get('type', 'standard')}")
     print("=" * 80)
 
     return model
@@ -100,11 +108,9 @@ def create_dataloaders(cfg: DictConfig):
     print("=" * 80)
     print("Creating dataloaders...")
 
-    # Create transforms
-    task_transform, raw_transform = create_tta_transforms(
-        task_input_size=cfg.data.task_input_size,
-        task_mean=cfg.data.task_mean,
-        task_std=cfg.data.task_std,
+    # Create transform (outputs [0, 1] tensor)
+    transform = create_tta_transform(
+        input_size=cfg.data.get("input_size", 224),
     )
 
     # Create task datasets
@@ -112,8 +118,7 @@ def create_dataloaders(cfg: DictConfig):
         root=cfg.data.root,
         corruptions=cfg.data.corruptions,
         severities=cfg.data.severities,
-        task_transform=task_transform,
-        raw_transform=raw_transform,
+        transform=transform,
     )
 
     print(f"Created {len(tasks)} tasks")

@@ -17,6 +17,4 @@ pin_memory: true
 persistent_workers: true
 
 # Transform settings
-task_input_size: 224
-task_mean: [0.50, 0.50, 0.50]  # ViT use 0.5 mean
-task_std: [0.50, 0.50, 0.50]  # ViT use 0.5 std
+input_size: 224  # CenterCrop size (output is [0, 1] tensor)

@@ -559,35 +559,30 @@ class REPASiT(nn.Module):
         # VAE always frozen
         self.vae.requires_grad_(False)
 
-    def preprocess_images(self, images: List[torch.Tensor]) -> torch.Tensor:
+    def preprocess_images(self, images: torch.Tensor) -> torch.Tensor:
         """
         Preprocess images for diffusion model.
 
         Args:
-            images: List of (C, H, W) tensors in BGR, range [0, 255]
+            images: Tensor (B, 3, H, W) in RGB, range [0, 1]
 
         Returns:
             Preprocessed tensor (B, 3, 256, 256) in RGB, range [-1, 1]
         """
-        # BGR to RGB
-        images_rgb = [img[[2, 1, 0], :, :] for img in images]
-
-        # Stack and resize
-        images_batch = torch.stack(images_rgb, dim=0).float()  # (B, 3, H, W)
-        if images_batch.shape[-2:] != (256, 256):
-            images_batch = F.interpolate(
-                images_batch, size=(256, 256), mode="bilinear", align_corners=True
+        # Resize to 256x256 if needed
+        if images.shape[-2:] != (256, 256):
+            images = F.interpolate(
+                images, size=(256, 256), mode="bilinear", align_corners=True
             )
 
-        # Normalize to [-1, 1]
-        images_batch = images_batch / 255.0
-        images_batch = images_batch * 2.0 - 1.0
+        # Scale from [0, 1] to [-1, 1]
+        images = images * 2.0 - 1.0
 
-        return images_batch.to(self.device)
+        return images.to(self.device)
 
     def forward(
         self,
-        images: List[torch.Tensor],
+        images: torch.Tensor,
         normed_logits: torch.Tensor,
         ori_logits: torch.Tensor,
         batch_infos: Optional[Dict] = None,
@@ -596,7 +591,7 @@ class REPASiT(nn.Module):
         Forward pass for REPA loss computation.
 
         Args:
-            images: List of input images (C, H, W) in BGR [0, 255]
+            images: Input images tensor (B, 3, H, W) in RGB [0, 1] (already detached)
             normed_logits: L2-normalized logits (B, num_classes)
             ori_logits: Original logits (B, num_classes)
             batch_infos: Optional dict with step, all_steps, task_name

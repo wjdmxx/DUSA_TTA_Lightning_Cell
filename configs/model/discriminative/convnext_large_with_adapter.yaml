@@ -1,14 +1,19 @@
 # ConvNeXt-Large with Pixel TTA Adapter
 # 在分类器前添加像素级适配器，学习输入空间的TTA偏移
 
-model_name: "convnext_large"
-pretrained: true
-checkpoint_path: null
-num_classes: 1000
+discriminative:
+  model_name: "convnext_large"
+  pretrained: true
+  checkpoint_path: null
+  num_classes: 1000
+  # Normalization settings (applied in model forward)
+  normalize_mean: [0.485, 0.456, 0.406]  # ImageNet mean
+  normalize_std: [0.229, 0.224, 0.225]   # ImageNet std
+
+generative: null  # No auxiliary model
 
 # Pixel Adapter Configuration
-use_pixel_adapter: true
-pixel_adapter_config:
+pixel_adapter:
   # "standard" (推荐) 或 "light" (更轻量)
   type: "standard"
   
