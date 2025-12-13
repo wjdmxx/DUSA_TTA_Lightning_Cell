@@ -263,9 +263,6 @@ class DUSATTAModule(pl.LightningModule):
         """Called at the start of each task (epoch)."""
         # Reset metrics for new task
         self._reset_metrics()
-        
-        # Reset adaptive loss weighting state in auxiliary model
-        self.model.reset_auxiliary_adaptive_state()
     
     def on_train_epoch_end(self):
         """Called at the end of each task (epoch). Log final metrics."""

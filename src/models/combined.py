@@ -152,12 +152,7 @@ class CombinedModel(nn.Module):
         """Configure auxiliary model training mode."""
         if self.auxiliary_model is not None:
             self.auxiliary_model.set_train_mode(update_flow=update_flow)
-    
-    def reset_auxiliary_adaptive_state(self):
-        """Reset adaptive state in auxiliary model (called at start of each epoch/task)."""
-        if self.auxiliary_model is not None and hasattr(self.auxiliary_model, 'reset_adaptive_state'):
-            self.auxiliary_model.reset_adaptive_state()
-    
+
     def get_model_state(self) -> Dict[str, torch.Tensor]:
         """Get current model state for reset."""
         state = {

@@ -382,18 +382,12 @@ class REPASiT(nn.Module):
         rand_budget: int = 2,
         temperature: float = 1.0,
         sample_reverse_logits: bool = False,
+        kendall_topk: int = 6,
+        kendall_temperature: float = 1.0,
         # Scheduler config
         scheduler_type: str = "linear",
         time_sampler_type: str = "uniform",
         time_sampler_kwargs: Optional[Dict] = None,
-        # Adaptive loss weighting config
-        adaptive_loss_weight: bool = False,
-        adaptive_only_positive: bool = True,
-        adaptive_warmup_steps: int = 100,
-        adaptive_ema_decay: float = 0.99,
-        adaptive_weight_min: float = 0.5,
-        adaptive_weight_max: float = 1.5,
-        adaptive_gap_norm_std: float = 0.9,
         # Device
         device: Optional[torch.device] = None,
     ):
@@ -404,18 +398,8 @@ class REPASiT(nn.Module):
         self.temperature = temperature
         self.sample_reverse_logits = sample_reverse_logits
         self.num_classes = num_classes
-
-        # Adaptive loss weighting settings
-        self.adaptive_loss_weight = adaptive_loss_weight
-        self.adaptive_only_positive = adaptive_only_positive
-        self.adaptive_warmup_steps = adaptive_warmup_steps
-        self.adaptive_ema_decay = adaptive_ema_decay
-        self.adaptive_weight_min = adaptive_weight_min
-        self.adaptive_weight_max = adaptive_weight_max
-        self.adaptive_gap_norm_std = adaptive_gap_norm_std
-
-        # Adaptive state (will be reset each epoch)
-        self._reset_adaptive_state()
+        self.kendall_topk = kendall_topk
+        self.kendall_temperature = kendall_temperature
 
         # Device setup
         if device is None:
@@ -467,84 +451,6 @@ class REPASiT(nn.Module):
         self.time_sampler = create_time_sampler(
             time_sampler_type, **time_sampler_kwargs
         )
-
-    def _reset_adaptive_state(self):
-        """Reset adaptive loss weighting state. Called at the start of each epoch."""
-        self.ema_gap_norm = 0.7  # Initial estimate based on typical values
-        self.adaptive_step_count = 0
-
-    def reset_adaptive_state(self):
-        """Public method to reset adaptive state between epochs."""
-        self._reset_adaptive_state()
-
-    def _compute_sample_weights(
-        self,
-        sample_gap_norm: torch.Tensor,
-        current_step: int,
-    ) -> torch.Tensor:
-        """
-        Compute per-sample loss weights based on gap_norm.
-
-        Args:
-            sample_gap_norm: (B,) gap_norm for each sample
-            current_step: Current step in the epoch
-
-        Returns:
-            sample_weights: (B,) weights in [weight_min, weight_max]
-        """
-        B = sample_gap_norm.shape[0]
-        device = sample_gap_norm.device
-
-        # During warmup, use uniform weights
-        if current_step < self.adaptive_warmup_steps:
-            return torch.ones(B, device=device)
-
-        # Compute weight based on deviation from EMA mean
-        # gap_norm > ema_gap_norm -> higher weight (up to weight_max)
-        # gap_norm < ema_gap_norm -> lower weight (down to weight_min)
-        deviation = (sample_gap_norm - self.ema_gap_norm) / (
-            self.adaptive_gap_norm_std + 1e-12
-        )
-
-        if self.adaptive_only_positive:
-            # Only increase weight for samples with gap_norm > ema_gap_norm
-            # Weight in [1, adaptive_weight_max]
-            # For gap_norm <= ema_gap_norm, weight is 1
-            sample_weights = torch.ones_like(deviation)
-            mask = deviation > 0
-            if mask.any():
-                sample_weights[mask] = 1.0 + (
-                    self.adaptive_weight_max - 1.0
-                ) * torch.tanh(deviation[mask])
-        else:
-            # Map deviation to weight range using tanh
-            # tanh(deviation) in [-1, 1] -> weight in [weight_min, weight_max]
-            weight_range = (self.adaptive_weight_max - self.adaptive_weight_min) / 2.0
-            weight_center = (self.adaptive_weight_max + self.adaptive_weight_min) / 2.0
-            sample_weights = weight_center + weight_range * torch.tanh(deviation)
-
-        return sample_weights
-
-    def _update_ema_gap_norm(self, batch_gap_norm: float, current_step: int):
-        """
-        Update EMA of gap_norm.
-
-        Args:
-            batch_gap_norm: Mean gap_norm of current batch
-            current_step: Current step in the epoch
-        """
-        self.adaptive_step_count += 1
-
-        if current_step < self.adaptive_warmup_steps:
-            # During warmup, use simple moving average
-            n = self.adaptive_step_count
-            self.ema_gap_norm = (self.ema_gap_norm * (n - 1) + batch_gap_norm) / n
-        else:
-            # After warmup, use EMA
-            self.ema_gap_norm = (
-                self.adaptive_ema_decay * self.ema_gap_norm
-                + (1 - self.adaptive_ema_decay) * batch_gap_norm
-            )
 
     def set_train_mode(self, update_flow: bool = True):
         """Configure which parameters to update."""
@@ -694,31 +600,22 @@ class REPASiT(nn.Module):
                 model_out, target, prob_as_coeff, K, selected_ori_logits
             )
 
-        # Compute sample weights for adaptive loss (no grad needed)
-        sample_weights = None
-        if self.adaptive_loss_weight:
-            current_step = batch_infos.get("step", 0)
-            sample_gap_norm = aux_losses["sample_gap_norm"]  # (B,)
+        # Compute per-sample REPA loss
+        per_sample_loss = self._compute_repa_loss(weighted_out, target)  # (B,)
 
-            with torch.no_grad():
-                # Compute per-sample weights
-                sample_weights = self._compute_sample_weights(
-                    sample_gap_norm, current_step
-                )
+        # Dynamic Kendall-based sample selection and weighting
+        kendall_scores = aux_losses["sample_kendall_tau"]  # (B,)
+        k = min(self.kendall_topk, B)
+        topk_values, topk_indices = torch.topk(kendall_scores, k=k, dim=0)
 
-                # Update EMA of gap_norm
-                batch_gap_norm = sample_gap_norm.mean().item()
-                self._update_ema_gap_norm(batch_gap_norm, current_step)
+        # Soft weights on selected samples
+        weights = F.softmax(topk_values / self.kendall_temperature, dim=0)
+        selected_losses = per_sample_loss[topk_indices]
+        loss = torch.sum(selected_losses * weights)
 
-            # Log adaptive weighting info
-            aux_losses["adaptive_weight_mean"] = sample_weights.mean()
-            aux_losses["adaptive_weight_std"] = sample_weights.std()
-            aux_losses["adaptive_ema_gap_norm"] = torch.tensor(
-                self.ema_gap_norm, device=target.device
-            )
-
-        # REPA loss: norm_l2_loss with optional sample weighting
-        loss = self._compute_repa_loss(weighted_out, target, sample_weights)
+        # Log selection stats
+        aux_losses["kendall_topk_mean"] = topk_values.mean()
+        aux_losses["kendall_weight_mean"] = weights.mean()
 
         return loss, aux_losses
 
@@ -726,38 +623,22 @@ class REPASiT(nn.Module):
         self,
         pred: torch.Tensor,
         target: torch.Tensor,
-        sample_weights: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
-        Compute REPA loss: norm_l2_loss with optional per-sample weighting.
+        Compute per-sample REPA loss using norm L2 with outlier resistance.
 
         Args:
             pred: (B, C, H, W) predicted output
             target: (B, C, H, W) target velocity
-            sample_weights: (B,) optional per-sample weights
 
         Returns:
-            Weighted mean loss (scalar)
+            Per-sample loss tensor of shape (B,)
         """
-        # Norm L2 loss with outlier resistance (per-sample)
         e = torch.mean((pred - target) ** 2, dim=(1, 2, 3), keepdim=False)  # (B,)
         p, c = 0.5, 1e-3
         norm_l2_per_sample = e / (e + c).pow(p).detach()  # (B,)
 
-        # Apply per-sample weights if provided
-        if sample_weights is not None:
-            # Weighted mean
-            norm_l2 = (norm_l2_per_sample * sample_weights).mean()
-        else:
-            norm_l2 = norm_l2_per_sample.mean()
-
-        # Cosine loss (not used in return, but kept for potential future use)
-        pred_flat = pred.view(pred.shape[0], -1)
-        target_flat = target.view(target.shape[0], -1)
-        cos_sim = F.cosine_similarity(pred_flat, target_flat, dim=1, eps=1e-8)
-        cos_loss = (1.0 - cos_sim).mean()
-
-        return norm_l2
+        return norm_l2_per_sample
 
     def _compute_weighted_kendall(
         self,
@@ -862,7 +743,7 @@ class REPASiT(nn.Module):
         sample_gap_norm = (mean_neg - mean_pos) / (std_all + 1e-12)  # (B,)
 
         # Store both sample-level and batch-level gap_norm
-        aux_losses["sample_gap_norm"] = sample_gap_norm  # (B,) for adaptive weighting
+        aux_losses["sample_gap_norm"] = sample_gap_norm  # (B,) for monitoring
         aux_losses["gap_norm"] = sample_gap_norm.mean()  # scalar for logging
 
         # Kendall tau consistency between discriminative and generative scores
