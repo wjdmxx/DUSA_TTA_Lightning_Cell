@@ -10,6 +10,8 @@ topk: 4
 rand_budget: 2
 temperature: 1.0
 sample_reverse_logits: false
+kendall_topk: 6
+kendall_temperature: 1.0
 
 scheduler_type: "linear"
 time_sampler_type: "uniform"
