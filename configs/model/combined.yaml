@@ -13,8 +13,8 @@ discriminative:
 pixel_adapter:
   type: "standard"
   in_channels: 3
-  hidden_channels: 32
-  num_blocks: 2
+  hidden_channels: 64
+  num_blocks: 3
   max_scale: 0.15
   use_spatial_attention: true
 

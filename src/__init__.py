@@ -1,4 +1,5 @@
 """DUSA TTA Lightning package."""
+
 __version__ = "1.0.0"
 
 from .models import (
@@ -13,7 +14,7 @@ from .models import (
 from .data import (
     ImageNetCDataset,
     create_imagenet_c_tasks,
-    create_tta_transforms,
+    create_tta_transform,
 )
 from .tta import DUSATTAModule
 from .utils import calculate_accuracy
@@ -29,7 +30,7 @@ __all__ = [
     "create_repa_sit",
     "ImageNetCDataset",
     "create_imagenet_c_tasks",
-    "create_tta_transforms",
+    "create_tta_transform",
     "DUSATTAModule",
     "calculate_accuracy",
 ]
