@@ -1,7 +1,6 @@
 # Discriminative model: ViT-Base-Patch16
 discriminative:
-  # model_name: "vit_base_patch16_224.augreg_in1k"
-  model_name: "vit_base_patch16_224"
+  model_name: "vit_base_patch16_224.augreg_in1k"
   pretrained: true
   checkpoint_path: null
   num_classes: 1000
@@ -11,13 +10,13 @@ discriminative:
 
 # Pixel Adapter: shared between discriminative and generative branches
 # Lives in CombinedModel, applied before both branches
-pixel_adapter:
-  type: "standard"
-  in_channels: 3
-  hidden_channels: 32
-  num_blocks: 2
-  max_scale: 0.15
-  use_spatial_attention: true
+# pixel_adapter:
+#   type: "standard"
+#   in_channels: 3
+#   hidden_channels: 32
+#   num_blocks: 2
+#   max_scale: 0.15
+#   use_spatial_attention: true
 
 # Generative model: REPA SiT
 generative:
@@ -34,6 +33,7 @@ generative:
   rand_budget: 2
   temperature: 1.0
   sample_reverse_logits: false
+  adaptive_loss_weight: false
   kendall_topk: 6
   kendall_temperature: 1.0
 

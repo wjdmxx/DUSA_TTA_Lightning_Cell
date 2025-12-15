@@ -37,17 +37,11 @@ class TimestepEmbedder(nn.Module):
     def positional_embedding(t, dim, max_period=10000):
         """Create sinusoidal timestep embeddings."""
         half = dim // 2
-        freqs = torch.exp(
-            -math.log(max_period)
-            * torch.arange(start=0, end=half, dtype=torch.float32)
-            / half
-        ).to(device=t.device)
+        freqs = torch.exp(-math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half).to(device=t.device)
         args = t[:, None].float() * freqs[None]
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
         if dim % 2:
-            embedding = torch.cat(
-                [embedding, torch.zeros_like(embedding[:, :1])], dim=-1
-            )
+            embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
         return embedding
 
     def forward(self, t):
@@ -62,18 +56,14 @@ class LabelEmbedder(nn.Module):
     def __init__(self, num_classes: int, hidden_size: int, dropout_prob: float = 0.1):
         super().__init__()
         use_cfg_embedding = dropout_prob > 0
-        self.embedding_table = nn.Embedding(
-            num_classes + use_cfg_embedding, hidden_size
-        )
+        self.embedding_table = nn.Embedding(num_classes + use_cfg_embedding, hidden_size)
         self.num_classes = num_classes
         self.dropout_prob = dropout_prob
 
     def token_drop(self, labels, force_drop_ids=None):
         """Drops labels to enable classifier-free guidance."""
         if force_drop_ids is None:
-            drop_ids = (
-                torch.rand(labels.shape[0], device=labels.device) < self.dropout_prob
-            )
+            drop_ids = torch.rand(labels.shape[0], device=labels.device) < self.dropout_prob
         else:
             drop_ids = force_drop_ids == 1
         labels = torch.where(drop_ids, self.num_classes, labels)
@@ -100,9 +90,7 @@ class SiTBlock(nn.Module):
     ):
         super().__init__()
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.attn = Attention(
-            hidden_size, num_heads=num_heads, qkv_bias=True, qk_norm=qk_norm
-        )
+        self.attn = Attention(hidden_size, num_heads=num_heads, qkv_bias=True, qk_norm=qk_norm)
         if hasattr(self.attn, "fused_attn"):
             self.attn.fused_attn = fused_attn
 
@@ -115,20 +103,12 @@ class SiTBlock(nn.Module):
             act_layer=approx_gelu,
             drop=0,
         )
-        self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(), nn.Linear(hidden_size, 6 * hidden_size, bias=True)
-        )
+        self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, 6 * hidden_size, bias=True))
 
     def forward(self, x, c):
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
-            self.adaLN_modulation(c).chunk(6, dim=-1)
-        )
-        x = x + gate_msa.unsqueeze(1) * self.attn(
-            modulate(self.norm1(x), shift_msa, scale_msa)
-        )
-        x = x + gate_mlp.unsqueeze(1) * self.mlp(
-            modulate(self.norm2(x), shift_mlp, scale_mlp)
-        )
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=-1)
+        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
+        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
 
 
@@ -138,12 +118,8 @@ class FinalLayer(nn.Module):
     def __init__(self, hidden_size: int, patch_size: int, out_channels: int):
         super().__init__()
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.linear = nn.Linear(
-            hidden_size, patch_size * patch_size * out_channels, bias=True
-        )
-        self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True)
-        )
+        self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
+        self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True))
 
     def forward(self, x, c):
         shift, scale = self.adaLN_modulation(c).chunk(2, dim=-1)
@@ -182,16 +158,12 @@ class SiT(nn.Module):
         self.num_classes = num_classes
         self.encoder_depth = encoder_depth
 
-        self.x_embedder = PatchEmbed(
-            input_size, patch_size, in_channels, hidden_size, bias=True
-        )
+        self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
 
         num_patches = self.x_embedder.num_patches
-        self.pos_embed = nn.Parameter(
-            torch.zeros(1, num_patches, hidden_size), requires_grad=False
-        )
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
 
         self.blocks = nn.ModuleList(
             [
@@ -206,9 +178,7 @@ class SiT(nn.Module):
             ]
         )
 
-        self.final_layer = FinalLayer(
-            decoder_hidden_size, patch_size, self.out_channels
-        )
+        self.final_layer = FinalLayer(decoder_hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -223,9 +193,7 @@ class SiT(nn.Module):
         self.apply(_basic_init)
 
         # Initialize pos_embed by sin-cos embedding
-        pos_embed = get_2d_sincos_pos_embed(
-            self.pos_embed.shape[-1], int(self.x_embedder.num_patches**0.5)
-        )
+        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.x_embedder.num_patches**0.5))
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
         # Initialize patch_embed
@@ -307,9 +275,7 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False, extra_tokens=
     grid = grid.reshape([2, 1, grid_size, grid_size])
     pos_embed = get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
     if cls_token and extra_tokens > 0:
-        pos_embed = np.concatenate(
-            [np.zeros([extra_tokens, embed_dim]), pos_embed], axis=0
-        )
+        pos_embed = np.concatenate([np.zeros([extra_tokens, embed_dim]), pos_embed], axis=0)
     return pos_embed
 
 
@@ -382,6 +348,7 @@ class REPASiT(nn.Module):
         rand_budget: int = 2,
         temperature: float = 1.0,
         sample_reverse_logits: bool = False,
+        adaptive_loss_weight: bool = False,
         kendall_topk: int = 6,
         kendall_temperature: float = 1.0,
         # Scheduler config
@@ -398,6 +365,7 @@ class REPASiT(nn.Module):
         self.temperature = temperature
         self.sample_reverse_logits = sample_reverse_logits
         self.num_classes = num_classes
+        self.adaptive_loss_weight = adaptive_loss_weight
         self.kendall_topk = kendall_topk
         self.kendall_temperature = kendall_temperature
 
@@ -448,9 +416,7 @@ class REPASiT(nn.Module):
         # Build scheduler and time sampler
         self.scheduler = FlowScheduler(scheduler_type=scheduler_type)
         time_sampler_kwargs = time_sampler_kwargs or {}
-        self.time_sampler = create_time_sampler(
-            time_sampler_type, **time_sampler_kwargs
-        )
+        self.time_sampler = create_time_sampler(time_sampler_type, **time_sampler_kwargs)
 
     def set_train_mode(self, update_flow: bool = True):
         """Configure which parameters to update."""
@@ -477,9 +443,7 @@ class REPASiT(nn.Module):
         """
         # Resize to 256x256 if needed
         if images.shape[-2:] != (256, 256):
-            images = F.interpolate(
-                images, size=(256, 256), mode="bilinear", align_corners=True
-            )
+            images = F.interpolate(images, size=(256, 256), mode="bilinear", align_corners=True)
 
         # Scale from [0, 1] to [-1, 1]
         images = images * 2.0 - 1.0
@@ -516,30 +480,20 @@ class REPASiT(nn.Module):
         x0 = self.vae.encode(x_img)  # (B, 4, 32, 32)
 
         # Top-k + random sampling
-        topk_logits, topk_idx = torch.topk(
-            normed_logits, self.topk, dim=-1
-        )  # (B, topk)
+        topk_logits, topk_idx = torch.topk(normed_logits, self.topk, dim=-1)  # (B, topk)
 
         if self.rand_budget > 0:
             # Get non-topk indices
-            _, non_topk_idx = torch.topk(
-                normed_logits, normed_logits.shape[1] - self.topk, dim=-1, largest=False
-            )
+            _, non_topk_idx = torch.topk(normed_logits, normed_logits.shape[1] - self.topk, dim=-1, largest=False)
 
             # Sample from non-topk using temperature-scaled original logits
             if self.sample_reverse_logits:
                 # Sample from low-confidence classes
-                rand_logits = (
-                    -torch.gather(ori_logits, 1, non_topk_idx) / self.temperature
-                )
+                rand_logits = -torch.gather(ori_logits, 1, non_topk_idx) / self.temperature
             else:
-                rand_logits = (
-                    torch.gather(ori_logits, 1, non_topk_idx) / self.temperature
-                )
+                rand_logits = torch.gather(ori_logits, 1, non_topk_idx) / self.temperature
 
-            rand_idx = torch.multinomial(
-                F.softmax(rand_logits, dim=1), self.rand_budget, replacement=False
-            )
+            rand_idx = torch.multinomial(F.softmax(rand_logits, dim=1), self.rand_budget, replacement=False)
             rand_idx = torch.gather(non_topk_idx, 1, rand_idx)  # (B, rand_budget)
 
             # Combine topk + random
@@ -547,13 +501,9 @@ class REPASiT(nn.Module):
 
             # Weighting coefficients
             if self.sample_reverse_logits:
-                prob_as_coeff = F.softmax(
-                    topk_logits, dim=-1
-                )  # Only use topk for weighting
+                prob_as_coeff = F.softmax(topk_logits, dim=-1)  # Only use topk for weighting
             else:
-                prob_as_coeff = F.softmax(
-                    torch.gather(normed_logits, 1, forward_idx), dim=-1
-                )
+                prob_as_coeff = F.softmax(torch.gather(normed_logits, 1, forward_idx), dim=-1)
 
             K = self.topk + self.rand_budget
         else:
@@ -575,9 +525,7 @@ class REPASiT(nn.Module):
 
         # Flow model forward
         model_out, _ = self.flow_model(x=x_t_rep, t=t_rep, y=y)
-        model_out = rearrange(
-            model_out, "(b k) c h w -> b k c h w", b=B
-        )  # (B, K, 4, 32, 32)
+        model_out = rearrange(model_out, "(b k) c h w -> b k c h w", b=B)  # (B, K, 4, 32, 32)
 
         # Separate topk and random outputs
         topk_out = model_out[:, : self.topk, ...]  # (B, topk, 4, 32, 32)
@@ -596,26 +544,27 @@ class REPASiT(nn.Module):
         with torch.no_grad():
             # Get discriminative scores for selected classes
             selected_ori_logits = torch.gather(ori_logits, 1, forward_idx)  # (B, K)
-            aux_losses = self._compute_aux_metrics(
-                model_out, target, prob_as_coeff, K, selected_ori_logits
-            )
+            aux_losses = self._compute_aux_metrics(model_out, target, prob_as_coeff, K, selected_ori_logits)
 
         # Compute per-sample REPA loss
         per_sample_loss = self._compute_repa_loss(weighted_out, target)  # (B,)
 
-        # Dynamic Kendall-based sample selection and weighting
-        kendall_scores = aux_losses["sample_kendall_tau"]  # (B,)
-        k = min(self.kendall_topk, B)
-        topk_values, topk_indices = torch.topk(kendall_scores, k=k, dim=0)
+        if self.adaptive_loss_weight:
+            # Dynamic Kendall-based sample selection and weighting
+            kendall_scores = aux_losses["sample_kendall_tau"]  # (B,)
+            k = min(self.kendall_topk, B)
+            topk_values, topk_indices = torch.topk(kendall_scores, k=k, dim=0)
 
-        # Soft weights on selected samples
-        weights = F.softmax(topk_values / self.kendall_temperature, dim=0)
-        selected_losses = per_sample_loss[topk_indices]
-        loss = torch.sum(selected_losses * weights)
+            # Soft weights on selected samples
+            weights = F.softmax(topk_values / self.kendall_temperature, dim=0)
+            selected_losses = per_sample_loss[topk_indices]
+            loss = torch.sum(selected_losses * weights)
 
-        # Log selection stats
-        aux_losses["kendall_topk_mean"] = topk_values.mean()
-        aux_losses["kendall_weight_mean"] = weights.mean()
+            # Log selection stats
+            aux_losses["kendall_topk_mean"] = topk_values.mean()
+            aux_losses["kendall_weight_mean"] = weights.mean()
+        else:
+            loss = per_sample_loss.mean()
 
         return loss, aux_losses
 
@@ -728,9 +677,7 @@ class REPASiT(nn.Module):
         if loss_neg.numel() > 0:
             pos_score = -loss_pos.unsqueeze(-1)  # (B, topk, 1)
             neg_score = -loss_neg.unsqueeze(1)  # (B, 1, rand_budget)
-            pairwise = (pos_score > neg_score).float() + 0.5 * (
-                pos_score == neg_score
-            ).float()
+            pairwise = (pos_score > neg_score).float() + 0.5 * (pos_score == neg_score).float()
             auc = pairwise.mean()
         else:
             auc = torch.tensor(1.0, device=loss_pos.device)
