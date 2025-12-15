@@ -270,6 +270,10 @@ def main(cfg: DictConfig):
         print(f"{'MEAN':<40} {mean_top1:<12.2f} {mean_top5:<12.2f}")
         print("=" * 80)
 
+        top1_line = " ".join(f"{acc['top1']:.2f}" for acc in all_task_results.values())
+        print("TOP1:", top1_line)
+
+
         # Log summary to W&B
         if loggers:
             for logger in loggers:
