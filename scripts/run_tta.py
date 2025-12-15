@@ -167,6 +167,8 @@ def main(cfg: DictConfig):
         forward_mode=cfg.tta.forward_mode,
         log_aux_metrics=cfg.logging.log_aux_metrics,
         num_classes=cfg.model.discriminative.num_classes,
+        sample_log_dir=getattr(cfg.logging, "sample_log_dir", None),
+        enable_sample_logging=getattr(cfg.logging, "enable_sample_logging", True),
     )
 
     # Save initial model state before any TTA

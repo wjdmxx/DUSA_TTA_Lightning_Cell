@@ -599,6 +599,10 @@ class REPASiT(nn.Module):
             aux_losses = self._compute_aux_metrics(
                 model_out, target, prob_as_coeff, K, selected_ori_logits
             )
+            selected_norm_logits = torch.gather(normed_logits, 1, forward_idx)  # (B, K)
+            aux_losses["forward_idx"] = forward_idx
+            aux_losses["selected_ori_logits"] = selected_ori_logits
+            aux_losses["selected_norm_logits"] = selected_norm_logits
 
         # Compute per-sample REPA loss
         per_sample_loss = self._compute_repa_loss(weighted_out, target)  # (B,)
@@ -723,6 +727,7 @@ class REPASiT(nn.Module):
             aux_losses[f"loss_top_{i}"] = loss_pos[:, i].mean()
         for i in range(K - self.topk):
             aux_losses[f"loss_rand_{i}"] = loss_neg[:, i].mean()
+        aux_losses["per_class_loss"] = per_class_loss
 
         # AUC (ranking metric)
         if loss_neg.numel() > 0:

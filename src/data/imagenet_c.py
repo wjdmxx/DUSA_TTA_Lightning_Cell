@@ -79,6 +79,7 @@ class ImageNetCDataset(Dataset):
         return {
             "image": image_tensor,
             "label": label,
+            "index": idx,
             "image_path": str(img_path),
         }
 
@@ -131,10 +132,12 @@ def custom_collate_fn(batch):
     """
     images = torch.stack([item["image"] for item in batch])
     labels = torch.tensor([item["label"] for item in batch])
+    indices = torch.tensor([item.get("index", i) for i, item in enumerate(batch)])
     image_paths = [item["image_path"] for item in batch]
     
     return {
         "images": images,  # (B, 3, 224, 224) in [0, 1]
         "labels": labels,
+        "indices": indices,
         "image_paths": image_paths,
     }

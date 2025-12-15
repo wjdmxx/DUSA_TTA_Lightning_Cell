@@ -1,9 +1,13 @@
 """PyTorch Lightning module for DUSA TTA."""
-import torch
-import pytorch_lightning as pl
-from torchmetrics import Accuracy
-from typing import Optional, Dict, Any
+import csv
+import os
 from copy import deepcopy
+from pathlib import Path
+from typing import Optional, Dict, Any, List
+
+import pytorch_lightning as pl
+import torch
+from torchmetrics import Accuracy
 
 from ..models import CombinedModel
 from ..utils import calculate_accuracy
@@ -29,6 +33,8 @@ class DUSATTAModule(pl.LightningModule):
         forward_mode: str = "normed_logits_with_logits",
         log_aux_metrics: bool = False,
         num_classes: int = 1000,
+        sample_log_dir: Optional[str] = None,
+        enable_sample_logging: bool = True,
     ):
         """
         Args:
@@ -42,6 +48,8 @@ class DUSATTAModule(pl.LightningModule):
             forward_mode: Forward mode for combined model
             log_aux_metrics: Whether to log auxiliary metrics (loss_top_i, auc, etc.)
             num_classes: Number of classes for accuracy metrics
+            sample_log_dir: Directory to dump per-sample CSV logs (one file per task)
+            enable_sample_logging: Toggle per-sample CSV logging
         """
         super().__init__()
         
@@ -54,10 +62,15 @@ class DUSATTAModule(pl.LightningModule):
         self.update_pixel_adapter = update_pixel_adapter
         self.forward_mode = forward_mode
         self.log_aux_metrics = log_aux_metrics
+        self.enable_sample_logging = enable_sample_logging
+        self.sample_log_dir = Path(sample_log_dir) if sample_log_dir else None
         
         # Current task info (set by callback)
         self.current_task_name = "unknown"
         self.current_task_idx = 0
+        self.current_task_log_path: Optional[Path] = None
+        self._task_log_header_written = False
+        self._sample_counter = 0
         
         # TorchMetrics for cumulative accuracy (automatically handles accumulation)
         self.train_acc_top1 = Accuracy(task="multiclass", num_classes=num_classes, top_k=1)
@@ -86,10 +99,126 @@ class DUSATTAModule(pl.LightningModule):
         # Set auxiliary model training mode
         if self.update_auxiliary:
             self.model.set_auxiliary_train_mode(update_flow=True)
+
+    def _prepare_task_logging(self):
+        """Initialize per-task CSV logging state."""
+        self._task_log_header_written = False
+        self._sample_counter = 0
+        if not self.enable_sample_logging or self.sample_log_dir is None:
+            self.current_task_log_path = None
+            return
+
+        self.sample_log_dir.mkdir(parents=True, exist_ok=True)
+        safe_task_name = self.current_task_name.replace(os.sep, "_")
+        log_name = f"task_{self.current_task_idx:02d}_{safe_task_name}.csv"
+        self.current_task_log_path = self.sample_log_dir / log_name
     
     def save_initial_state(self):
         """Manually save initial model state before TTA begins."""
         self.initial_model_state = deepcopy(self.model.get_model_state())
+
+    def _write_task_log_header(self, k: int):
+        """Write CSV header for the current task."""
+        if self.current_task_log_path is None or self._task_log_header_written:
+            return
+
+        header: List[str] = [
+            "sample_index",
+            "label",
+            "prediction",
+            "correct",
+            "gap_norm",
+            "kendall_tau",
+        ]
+        for i in range(k):
+            header.extend(
+                [
+                    f"class_{i}",
+                    f"ori_logit_{i}",
+                    f"norm_logit_{i}",
+                    f"gen_loss_{i}",
+                ]
+            )
+        header.append("image_path")
+
+        with self.current_task_log_path.open("w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(header)
+
+        self._task_log_header_written = True
+
+    def _record_sample_batch(
+        self,
+        batch: Dict[str, Any],
+        logits: torch.Tensor,
+        aux_metrics: Dict[str, torch.Tensor],
+    ):
+        """Append per-sample details to CSV for the current task."""
+        if self.current_task_log_path is None or not aux_metrics:
+            return
+
+        required_keys = [
+            "forward_idx",
+            "selected_ori_logits",
+            "selected_norm_logits",
+            "per_class_loss",
+            "sample_gap_norm",
+            "sample_kendall_tau",
+        ]
+        if any(key not in aux_metrics for key in required_keys):
+            return
+
+        forward_idx = aux_metrics["forward_idx"].detach().cpu()
+        selected_ori_logits = aux_metrics["selected_ori_logits"].detach().cpu()
+        selected_norm_logits = aux_metrics["selected_norm_logits"].detach().cpu()
+        per_class_loss = aux_metrics["per_class_loss"].detach().cpu()
+        gap_norm = aux_metrics["sample_gap_norm"].detach().cpu()
+        kendall = aux_metrics["sample_kendall_tau"].detach().cpu()
+
+        batch_size, k = forward_idx.shape
+        self._write_task_log_header(k)
+
+        with torch.no_grad():
+            preds = torch.argmax(logits.detach(), dim=-1).cpu()
+        labels = batch["labels"].detach().cpu()
+        correct = preds.eq(labels)
+
+        indices = batch.get("indices")
+        if indices is None:
+            indices_tensor = torch.arange(
+                self._sample_counter, self._sample_counter + batch_size
+            )
+        else:
+            indices_tensor = (
+                indices.detach().cpu() if torch.is_tensor(indices) else torch.tensor(indices)
+            )
+
+        image_paths = batch.get("image_paths", [""] * batch_size)
+
+        with self.current_task_log_path.open("a", newline="") as f:
+            writer = csv.writer(f)
+            for i in range(batch_size):
+                row = [
+                    int(indices_tensor[i]),
+                    int(labels[i]),
+                    int(preds[i]),
+                    int(correct[i]),
+                    float(gap_norm[i]),
+                    float(kendall[i]),
+                ]
+                for cls_idx in range(k):
+                    row.extend(
+                        [
+                            int(forward_idx[i, cls_idx]),
+                            float(selected_ori_logits[i, cls_idx]),
+                            float(selected_norm_logits[i, cls_idx]),
+                            float(per_class_loss[i, cls_idx]),
+                        ]
+                    )
+                row.append(image_paths[i] if i < len(image_paths) else "")
+                writer.writerow(row)
+
+        self._sample_counter += batch_size
     
     def on_fit_start(self):
         """Save initial model state before TTA (only if not already saved)."""
@@ -120,6 +249,7 @@ class DUSATTAModule(pl.LightningModule):
             logits: Predictions (B, num_classes)
             loss: Auxiliary loss (scalar)
             metrics: Dict of metrics
+            aux_metrics: Raw auxiliary metrics (may include tensors)
         """
         images = batch["images"]  # (B, 3, 224, 224) in [0, 1]
         labels = batch["labels"]
@@ -155,9 +285,14 @@ class DUSATTAModule(pl.LightningModule):
         }
         
         if self.log_aux_metrics and aux_metrics:
-            metrics.update({k: v.item() if torch.is_tensor(v) else v for k, v in aux_metrics.items()})
+            for k, v in aux_metrics.items():
+                if torch.is_tensor(v):
+                    if v.dim() == 0:
+                        metrics[k] = v.item()
+                else:
+                    metrics[k] = v
         
-        return logits, auxiliary_loss, metrics
+        return logits, auxiliary_loss, metrics, aux_metrics
     
     def training_step(self, batch, batch_idx):
         """
@@ -165,7 +300,7 @@ class DUSATTAModule(pl.LightningModule):
         Supports gradient accumulation via trainer config.
         """
         # Forward pass
-        logits, loss, metrics = self(batch, batch_idx)
+        logits, loss, metrics, aux_metrics = self(batch, batch_idx)
         labels = batch["labels"]
         
         # Update TorchMetrics (automatically accumulates)
@@ -192,6 +327,9 @@ class DUSATTAModule(pl.LightningModule):
             aux_keys = [k for k in metrics.keys() if k not in ["loss", "top1", "top5"]]
             for k in aux_keys:
                 self.log(f"{task_prefix}/aux/{k}", metrics[k], on_step=False, on_epoch=True, prog_bar=False)
+
+        # Per-sample logging (CSV)
+        self._record_sample_batch(batch, logits, aux_metrics)
         
         return loss
     
@@ -263,6 +401,7 @@ class DUSATTAModule(pl.LightningModule):
         """Called at the start of each task (epoch)."""
         # Reset metrics for new task
         self._reset_metrics()
+        self._prepare_task_logging()
     
     def on_train_epoch_end(self):
         """Called at the end of each task (epoch). Log final metrics."""
