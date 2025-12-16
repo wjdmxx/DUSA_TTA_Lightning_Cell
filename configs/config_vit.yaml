@@ -12,7 +12,7 @@ data_root: "/mnt/bit/data/imagenet-c/"  # UPDATE THIS
 
 # Experiment settings
 seed: 42
-experiment_name: "ViT_2e-5"
+experiment_name: "ViT_2e-5_sample_log"
 
 # TTA settings
 tta:
@@ -30,7 +30,7 @@ optimizer:
 
 # Logging
 logging:
-  use_wandb: true
+  use_wandb: false
   wandb_project: "dusa-tta-vit"
   wandb_entity: "lyxszn-beihang-university"  # Set to your W&B username/team
   log_aux_metrics: false  # Log auxiliary metrics (loss_top_i, auc, etc.) - disabled by default

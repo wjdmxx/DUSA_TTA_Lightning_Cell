@@ -33,7 +33,7 @@ generative:
   rand_budget: 2
   temperature: 1.0
   sample_reverse_logits: false
-  adaptive_loss_weight: true
+  adaptive_loss_weight: false
   kendall_topk: 8
   kendall_temperature: -1.0
 
