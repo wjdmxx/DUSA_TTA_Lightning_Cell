@@ -350,6 +350,7 @@ class REPASiT(nn.Module):
         sample_reverse_logits: bool = False,
         adaptive_loss_weight: bool = False,
         kendall_topk: int = 6,
+        kendall_gate_only: bool = False,
         kendall_temperature: float = 1.0,
         # Scheduler config
         scheduler_type: str = "linear",
@@ -367,6 +368,7 @@ class REPASiT(nn.Module):
         self.num_classes = num_classes
         self.adaptive_loss_weight = adaptive_loss_weight
         self.kendall_topk = kendall_topk
+        self.kendall_gate_only = kendall_gate_only
         self.kendall_temperature = kendall_temperature
 
         # Device setup
@@ -544,9 +546,7 @@ class REPASiT(nn.Module):
         with torch.no_grad():
             # Get discriminative scores for selected classes
             selected_ori_logits = torch.gather(ori_logits, 1, forward_idx)  # (B, K)
-            aux_losses = self._compute_aux_metrics(
-                model_out, target, prob_as_coeff, K, selected_ori_logits
-            )
+            aux_losses = self._compute_aux_metrics(model_out, target, prob_as_coeff, K, selected_ori_logits)
             selected_norm_logits = torch.gather(normed_logits, 1, forward_idx)  # (B, K)
             aux_losses["forward_idx"] = forward_idx
             aux_losses["selected_ori_logits"] = selected_ori_logits
@@ -557,18 +557,20 @@ class REPASiT(nn.Module):
 
         if self.adaptive_loss_weight:
             # Dynamic Kendall-based sample selection and weighting
-            kendall_scores = aux_losses["sample_kendall_tau"]  # (B,)
+            kendall_scores = aux_losses["sample_kendall_tau"].detach()  # (B,)
             k = min(self.kendall_topk, B)
+            k = max(k, 1)
             topk_values, topk_indices = torch.topk(kendall_scores, k=k, dim=0)
 
-            # Soft weights on selected samples
-            weights = F.softmax(topk_values / self.kendall_temperature, dim=0)
             selected_losses = per_sample_loss[topk_indices]
-            loss = torch.sum(selected_losses * weights)
+            if self.kendall_gate_only:
+                loss = selected_losses.mean()
+            else:
+                weights = F.softmax(topk_values / self.kendall_temperature, dim=0)
+                loss = torch.sum(selected_losses * weights)
 
-            # Log selection stats
-            aux_losses["kendall_topk_mean"] = topk_values.mean()
-            aux_losses["kendall_weight_mean"] = weights.mean()
+                aux_losses["kendall_topk_mean"] = topk_values.mean()
+                aux_losses["kendall_weight_mean"] = weights.mean()
         else:
             loss = per_sample_loss.mean()
 

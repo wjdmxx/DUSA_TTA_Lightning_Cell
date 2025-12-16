@@ -33,9 +33,10 @@ generative:
   rand_budget: 2
   temperature: 1.0
   sample_reverse_logits: false
-  adaptive_loss_weight: false
-  kendall_topk: 6
-  kendall_temperature: 1.0
+  adaptive_loss_weight: true
+  kendall_topk: 7
+  kendall_gate_only: true
+  # kendall_temperature: 1.0
 
   # Scheduler settings
   scheduler_type: "linear"  # linear or reverse_linear
