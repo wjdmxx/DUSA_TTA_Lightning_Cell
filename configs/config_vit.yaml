@@ -1,6 +1,6 @@
 # Main configuration file
 defaults:
-  - model: combined_vit_patch16
+  - model: combined_vit
   - data: imagenet_c
   - trainer: default
   - experiment: null  # Override with experiment configs
@@ -12,7 +12,7 @@ data_root: "/mnt/bit/data/imagenet-c/"  # UPDATE THIS
 
 # Experiment settings
 seed: 42
-experiment_name: "ViT_2e-5"
+experiment_name: "ViT_2e-5_kendall_gate_only_topk7_8"
 
 # TTA settings
 tta:
@@ -34,7 +34,7 @@ logging:
   wandb_project: "dusa-tta-vit"
   wandb_entity: "lyxszn-beihang-university"  # Set to your W&B username/team
   log_aux_metrics: false  # Log auxiliary metrics (loss_top_i, auc, etc.) - disabled by default
-  enable_sample_logging: true  # Toggle per-sample CSV logging
+  enable_sample_logging: false  # Toggle per-sample CSV logging
   sample_log_dir: "${work_dir}/sample_logs"  # Per-experiment sample-level CSV outputs
 
 # Hydra settings
