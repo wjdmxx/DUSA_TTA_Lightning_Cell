@@ -14,6 +14,7 @@ from einops import rearrange
 
 from .scheduler import FlowScheduler, create_time_sampler
 from .vae import VAEEncoder
+from .time_selector import ContextualTimeStepSelector
 
 
 def modulate(x, shift, scale):
@@ -416,7 +417,28 @@ class REPASiT(nn.Module):
         # Build scheduler and time sampler
         self.scheduler = FlowScheduler(scheduler_type=scheduler_type)
         time_sampler_kwargs = time_sampler_kwargs or {}
-        self.time_sampler = create_time_sampler(time_sampler_type, **time_sampler_kwargs)
+        self.time_sampler = None
+        self.time_selector = None
+        self.time_sampler_type = time_sampler_type
+
+        if time_sampler_type == "contextual_linucb":
+            time_candidates = time_sampler_kwargs.get("time_candidates") or time_sampler_kwargs.get("t_candidates")
+            if time_candidates is None:
+                # Default to an 8-step grid if not provided
+                time_candidates = torch.linspace(0.05, 0.95, steps=8).tolist()
+
+            self.time_selector = ContextualTimeStepSelector(
+                time_candidates=time_candidates,
+                alpha=time_sampler_kwargs.get("alpha", 2.0),
+                lambda_reg=time_sampler_kwargs.get("lambda_reg", 1.0),
+                gamma=time_sampler_kwargs.get("gamma", 0.995),
+                update_interval=time_sampler_kwargs.get("update_interval", 1),
+                high_freq_ratio=time_sampler_kwargs.get("high_freq_ratio", 0.25),
+                include_energy=time_sampler_kwargs.get("include_energy", True),
+                feature_eps=time_sampler_kwargs.get("feature_eps", 1e-6),
+            ).to(self.device)
+        else:
+            self.time_sampler = create_time_sampler(time_sampler_type, **time_sampler_kwargs)
 
     def set_train_mode(self, update_flow: bool = True):
         """Configure which parameters to update."""
@@ -513,7 +535,19 @@ class REPASiT(nn.Module):
 
         # Sample noise and timestep
         z = torch.randn_like(x0, device=x0.device)
-        t = self.time_sampler(B).to(self.device)
+        bandit_contexts = None
+        bandit_arm_indices = None
+        bandit_extra: Dict[str, torch.Tensor] = {}
+
+        if self.time_selector is not None:
+            with torch.no_grad():
+                selected_t, bandit_arm_indices, bandit_contexts, bandit_extra = self.time_selector.select_timesteps(
+                    images=images,
+                    logits=ori_logits,
+                )
+            t = selected_t.to(self.device)
+        else:
+            t = self.time_sampler(B).to(self.device)
 
         # Compute x_t
         x_t = self.scheduler.get_xt(x0, z, t)
@@ -551,6 +585,23 @@ class REPASiT(nn.Module):
             aux_losses["forward_idx"] = forward_idx
             aux_losses["selected_ori_logits"] = selected_ori_logits
             aux_losses["selected_norm_logits"] = selected_norm_logits
+            if self.time_selector is not None and bandit_contexts is not None and bandit_arm_indices is not None:
+                rewards = (aux_losses["sample_kendall_tau"].detach() + 1.0) * 0.5  # Map to [0, 1]
+                self.time_selector.observe(
+                    contexts=bandit_contexts,
+                    arm_indices=bandit_arm_indices,
+                    rewards=rewards,
+                    force_update=self.time_selector.update_interval <= 1,
+                )
+                aux_losses["bandit_reward"] = rewards
+                aux_losses["bandit_reward_mean"] = rewards.mean()
+                aux_losses["selected_timestep"] = t.detach()
+                aux_losses["selected_timestep_mean"] = t.mean()
+                aux_losses["selected_arm"] = bandit_arm_indices
+                if "ucb" in bandit_extra:
+                    ucb_scores = bandit_extra["ucb"]
+                    aux_losses["bandit_ucb_max"] = ucb_scores.max(dim=1).values.mean()
+                    aux_losses["bandit_ucb_mean"] = ucb_scores.mean()
 
         # Compute per-sample REPA loss
         per_sample_loss = self._compute_repa_loss(weighted_out, target)  # (B,)

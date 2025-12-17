@@ -14,7 +14,13 @@ kendall_topk: 6
 kendall_temperature: 1.0
 
 scheduler_type: "linear"
-time_sampler_type: "uniform"
+time_sampler_type: "contextual_linucb"  # set to "uniform" to disable bandit
 time_sampler_kwargs:
-  t_min: 0.0
-  t_max: 1.0
+  time_candidates: [0.05, 0.12, 0.2, 0.3, 0.45, 0.6, 0.75, 0.9]
+  alpha: 2.0
+  lambda_reg: 1.0
+  gamma: 0.995
+  update_interval: 1
+  high_freq_ratio: 0.25
+  include_energy: true
+  feature_eps: 1.0e-6

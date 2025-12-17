@@ -39,7 +39,14 @@ generative:
 
   # Scheduler settings
   scheduler_type: "linear"  # linear or reverse_linear
-  time_sampler_type: "uniform"
+  # Timestep policy (set to "uniform" to disable contextual bandit)
+  time_sampler_type: "contextual_linucb"
   time_sampler_kwargs:
-    t_min: 0.25
-    t_max: 0.25
+    time_candidates: [0.0821, 0.1111, 0.1345, 0.1558, 0.1763, 0.1967, 0.2174, 0.2389, 0.2615, 0.2857, 0.3121, 0.3417, 0.3758, 0.4170, 0.4707, 0.5541]
+    alpha: 2.0
+    lambda_reg: 1.0
+    gamma: 0.995
+    update_interval: 1
+    high_freq_ratio: 0.25
+    include_energy: true
+    feature_eps: 1.0e-6

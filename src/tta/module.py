@@ -117,7 +117,7 @@ class DUSATTAModule(pl.LightningModule):
         """Manually save initial model state before TTA begins."""
         self.initial_model_state = deepcopy(self.model.get_model_state())
 
-    def _write_task_log_header(self, k: int):
+    def _write_task_log_header(self, k: int, log_time: bool = False, log_reward: bool = False, log_arm: bool = False):
         """Write CSV header for the current task."""
         if self.current_task_log_path is None or self._task_log_header_written:
             return
@@ -130,6 +130,12 @@ class DUSATTAModule(pl.LightningModule):
             "gap_norm",
             "kendall_tau",
         ]
+        if log_time:
+            header.append("timestep")
+        if log_reward:
+            header.append("bandit_reward")
+        if log_arm:
+            header.append("bandit_arm")
         for i in range(k):
             header.extend(
                 [
@@ -174,9 +180,26 @@ class DUSATTAModule(pl.LightningModule):
         per_class_loss = aux_metrics["per_class_loss"].detach().cpu()
         gap_norm = aux_metrics["sample_gap_norm"].detach().cpu()
         kendall = aux_metrics["sample_kendall_tau"].detach().cpu()
+        selected_timesteps = None
+        if "selected_timestep" in aux_metrics:
+            selected_timesteps = aux_metrics["selected_timestep"].detach().cpu()
+        elif "selected_timesteps" in aux_metrics:
+            selected_timesteps = aux_metrics["selected_timesteps"].detach().cpu()
+
+        bandit_rewards = aux_metrics.get("bandit_reward")
+        if torch.is_tensor(bandit_rewards):
+            bandit_rewards = bandit_rewards.detach().cpu()
+        bandit_arms = aux_metrics.get("selected_arm")
+        if torch.is_tensor(bandit_arms):
+            bandit_arms = bandit_arms.detach().cpu()
 
         batch_size, k = forward_idx.shape
-        self._write_task_log_header(k)
+        self._write_task_log_header(
+            k,
+            log_time=selected_timesteps is not None,
+            log_reward=bandit_rewards is not None,
+            log_arm=bandit_arms is not None,
+        )
 
         with torch.no_grad():
             preds = torch.argmax(logits.detach(), dim=-1).cpu()
@@ -206,6 +229,12 @@ class DUSATTAModule(pl.LightningModule):
                     float(gap_norm[i]),
                     float(kendall[i]),
                 ]
+                if selected_timesteps is not None:
+                    row.append(float(selected_timesteps[i]))
+                if bandit_rewards is not None:
+                    row.append(float(bandit_rewards[i]))
+                if bandit_arms is not None:
+                    row.append(int(bandit_arms[i]))
                 for cls_idx in range(k):
                     row.extend(
                         [
