@@ -453,6 +453,11 @@ class REPASiT(nn.Module):
         # VAE always frozen
         self.vae.requires_grad_(False)
 
+    def reset_time_selector(self):
+        """Reset contextual timestep policy (bandit stats and buffers)."""
+        if self.time_selector is not None:
+            self.time_selector.reset()
+
     def preprocess_images(self, images: torch.Tensor) -> torch.Tensor:
         """
         Preprocess images for diffusion model.

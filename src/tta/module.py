@@ -3,7 +3,7 @@ import csv
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 import pytorch_lightning as pl
 import torch
@@ -82,6 +82,25 @@ class DUSATTAModule(pl.LightningModule):
         
         # Configure model training mode
         self._configure_model()
+
+    @staticmethod
+    def _split_aux_metrics(aux_metrics: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, torch.Tensor]]:
+        """
+        Split auxiliary metrics into scalar-for-logging and tensor-for-CSV parts.
+        Scalars (dim 0 tensors or python numbers) are safe to send to loggers (e.g., W&B).
+        Higher-dim tensors are kept for per-sample CSV logging.
+        """
+        scalar_metrics: Dict[str, Any] = {}
+        tensor_metrics: Dict[str, torch.Tensor] = {}
+        for k, v in aux_metrics.items():
+            if torch.is_tensor(v):
+                if v.dim() == 0:
+                    scalar_metrics[k] = v.detach()
+                else:
+                    tensor_metrics[k] = v
+            elif isinstance(v, (float, int)):
+                scalar_metrics[k] = v
+        return scalar_metrics, tensor_metrics
     
     def _reset_metrics(self):
         """Reset accumulated metrics for a new task."""
@@ -259,6 +278,8 @@ class DUSATTAModule(pl.LightningModule):
         if self.initial_model_state is not None:
             self.model.load_model_state(self.initial_model_state)
             self._configure_model()  # Re-configure training mode after reset
+            if hasattr(self.model, "reset_time_selector"):
+                self.model.reset_time_selector()
             self.print(f"Model reset to initial state")
     
     def set_task_info(self, task_name: str, task_idx: int):
@@ -296,13 +317,16 @@ class DUSATTAModule(pl.LightningModule):
             mode=self.forward_mode,
             batch_infos=batch_infos,
         )
-        
+
         # Unpack auxiliary loss and metrics
         if loss_with_metrics is not None:
-            auxiliary_loss, aux_metrics = loss_with_metrics
+            auxiliary_loss, raw_aux_metrics = loss_with_metrics
         else:
             auxiliary_loss = None
-            aux_metrics = {}
+            raw_aux_metrics = {}
+
+        # Separate scalar (for logger) vs tensor (for CSV) aux metrics
+        scalar_aux_metrics, tensor_aux_metrics = self._split_aux_metrics(raw_aux_metrics)
         
         # Calculate accuracy
         accuracy_metrics = calculate_accuracy(logits, labels, topk=(1, 5))
@@ -312,16 +336,12 @@ class DUSATTAModule(pl.LightningModule):
             "loss": auxiliary_loss.item() if auxiliary_loss is not None else 0.0,
             **accuracy_metrics,
         }
-        
-        if self.log_aux_metrics and aux_metrics:
-            for k, v in aux_metrics.items():
-                if torch.is_tensor(v):
-                    if v.dim() == 0:
-                        metrics[k] = v.item()
-                else:
-                    metrics[k] = v
-        
-        return logits, auxiliary_loss, metrics, aux_metrics
+
+        if self.log_aux_metrics and scalar_aux_metrics:
+            for k, v in scalar_aux_metrics.items():
+                metrics[k] = v.item() if torch.is_tensor(v) else v
+
+        return logits, auxiliary_loss, metrics, tensor_aux_metrics
     
     def training_step(self, batch, batch_idx):
         """
@@ -355,7 +375,7 @@ class DUSATTAModule(pl.LightningModule):
         if self.log_aux_metrics:
             aux_keys = [k for k in metrics.keys() if k not in ["loss", "top1", "top5"]]
             for k in aux_keys:
-                self.log(f"{task_prefix}/aux/{k}", metrics[k], on_step=False, on_epoch=True, prog_bar=False)
+                self.log(f"{task_prefix}/aux/{k}", metrics[k], on_step=True, on_epoch=False, prog_bar=False)
 
         # Per-sample logging (CSV)
         self._record_sample_batch(batch, logits, aux_metrics)

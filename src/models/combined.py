@@ -184,6 +184,11 @@ class CombinedModel(nn.Module):
             return self.pixel_adapter.get_effective_scale().item()
         return None
 
+    def reset_time_selector(self):
+        """Reset auxiliary timestep selector (bandit) if present."""
+        if self.auxiliary_model is not None and hasattr(self.auxiliary_model, "reset_time_selector"):
+            self.auxiliary_model.reset_time_selector()
+
 
 def create_combined_model(
     discriminative_config: Dict,

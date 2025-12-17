@@ -130,6 +130,13 @@ class DiscountedContextualLinUCB(nn.Module):
         self.register_buffer("lambda_reg", torch.tensor(lambda_reg))
 
     @torch.no_grad()
+    def reset_stats(self):
+        """Reset bandit sufficient statistics."""
+        A0 = torch.eye(self.context_dim, device=self.A.device, dtype=self.A.dtype) * float(self.lambda_reg)
+        self.A.copy_(A0.unsqueeze(0).repeat(self.num_arms, 1, 1))
+        self.b.zero_()
+
+    @torch.no_grad()
     def select(self, contexts: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -299,3 +306,8 @@ class ContextualTimeStepSelector(nn.Module):
 
         self.bandit.update(ctx, rew, arms)
 
+    @torch.no_grad()
+    def reset(self):
+        """Reset bandit statistics and clear pending buffers."""
+        self.bandit.reset_stats()
+        self._pending = {"contexts": [], "arms": [], "rewards": []}
