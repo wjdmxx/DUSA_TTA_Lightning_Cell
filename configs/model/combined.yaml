@@ -35,6 +35,7 @@ generative:
   sample_reverse_logits: false
   adaptive_loss_weight: false
   kendall_topk: 8
+  kendall_gate_only: true
   kendall_temperature: -1.0
 
   # Scheduler settings

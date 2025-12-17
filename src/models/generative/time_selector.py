@@ -1,4 +1,5 @@
 """Contextual timestep selection with discounted LinUCB."""
+
 from typing import Dict, List, Optional, Tuple
 
 import torch
@@ -18,9 +19,7 @@ class _ImageFeatureExtractor:
     def dim(self) -> int:
         return 8  # mean (3) + std (3) + laplacian (1) + high-freq ratio (1)
 
-    def _get_high_freq_mask(
-        self, height: int, width: int, device: torch.device, dtype: torch.dtype
-    ) -> torch.Tensor:
+    def _get_high_freq_mask(self, height: int, width: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
         """Precompute a radial high-frequency mask for FFT energy."""
         cache_key = (height, width, device, dtype)
         if cache_key in self._mask_cache:
@@ -53,7 +52,7 @@ class _ImageFeatureExtractor:
         gray = images.mean(dim=1, keepdim=True)
         lap_kernel = images.new_tensor([[[[0.0, 1.0, 0.0], [1.0, -4.0, 1.0], [0.0, 1.0, 0.0]]]])
         lap_resp = F.conv2d(gray, lap_kernel, padding=1)
-        lap_energy = (lap_resp ** 2).mean(dim=(1, 2, 3))  # (B,)
+        lap_energy = (lap_resp**2).mean(dim=(1, 2, 3))  # (B,)
 
         # High-frequency energy ratio via FFT
         fft = torch.fft.fft2(gray)
@@ -63,9 +62,7 @@ class _ImageFeatureExtractor:
         total_energy = power.sum(dim=(2, 3)) + self.eps  # (B, 1)
         high_ratio = (high_energy / total_energy).squeeze(1)  # (B,)
 
-        features = torch.cat(
-            [means, stds, lap_energy.unsqueeze(-1), high_ratio.unsqueeze(-1)], dim=1
-        )  # (B, 8)
+        features = torch.cat([means, stds, lap_energy.unsqueeze(-1), high_ratio.unsqueeze(-1)], dim=1)  # (B, 8)
         return features
 
 
@@ -78,7 +75,7 @@ class _OutputFeatureExtractor:
 
     @property
     def dim(self) -> int:
-        return 5 + int(self.include_energy)  # entropy, p_max, margin, ||z||, (energy)
+        return 4 + int(self.include_energy)  # entropy, p_max, margin, ||z||, (energy)
 
     @torch.no_grad()
     def __call__(self, logits: torch.Tensor) -> torch.Tensor:
