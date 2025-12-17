@@ -627,16 +627,12 @@ class REPASiT(nn.Module):
         # Sign product: concordant (+1), discordant (-1), or tie (0)
         sign_prod = torch.sign(diff_d) * torch.sign(diff_g)  # (B, K, K)
 
-        # Masks for concordant and discordant pairs (excluding ties)
-        mask_conc = (sign_prod > 0).float()  # (B, K, K)
-        mask_disc = (sign_prod < 0).float()  # (B, K, K)
-
         # Margin-based weights: sqrt(|diff_d| * |diff_g|)
-        w = (diff_d.abs() * diff_g.abs()).sqrt()  # (B, K, K)
+        w = torch.sqrt((diff_d.abs() * diff_g.abs()).clamp_min(1e-12))  # (B, K, K)
 
         # Weighted concordant and discordant counts per sample
-        C = (w * mask_conc).sum(dim=(1, 2))  # (B,)
-        D = (w * mask_disc).sum(dim=(1, 2))  # (B,)
+        C = torch.where(sign_prod > 0, w, torch.zeros_like(w)).sum(dim=(1, 2))
+        D = torch.where(sign_prod < 0, w, torch.zeros_like(w)).sum(dim=(1, 2))
 
         # Per-sample Kendall tau
         tau_w_per_sample = (C - D) / (C + D + eps)  # (B,)
