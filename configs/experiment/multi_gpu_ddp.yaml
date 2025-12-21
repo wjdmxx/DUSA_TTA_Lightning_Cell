@@ -36,6 +36,14 @@ tta:
 # Optimizer
 optimizer:
   learning_rate: 1e-5
+  scheduler:
+    name: null
+    interval: "step"
+    frequency: 1
+    t_max: 1000
+    eta_min: 0.0
+    step_size: 100
+    gamma: 0.5
 
 # Trainer - DDP on 4 GPUs
 trainer:
