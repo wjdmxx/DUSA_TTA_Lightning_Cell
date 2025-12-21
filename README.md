@@ -139,6 +139,7 @@ Configs are managed via Hydra. Key sections:
 - No training phase—only adaptation
 - Supports continual vs. reset-per-task
 - Manual optimization for fine control
+- Configurable Adam optimizer with optional cosine/step LR scheduler via Hydra (`optimizer.scheduler`)
 
 ### 5. Data Module (`src/data/`)
 - ImageNet-C dataset with 19 corruptions × 5 severities

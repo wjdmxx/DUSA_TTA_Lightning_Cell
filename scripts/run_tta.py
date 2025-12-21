@@ -161,6 +161,9 @@ def main(cfg: DictConfig):
         model=model,
         learning_rate=cfg.optimizer.learning_rate,
         weight_decay=cfg.optimizer.weight_decay,
+        scheduler_config=OmegaConf.to_container(
+            cfg.optimizer.get("scheduler"), resolve=True
+        ),
         continual=cfg.tta.continual,
         update_auxiliary=cfg.tta.update_auxiliary,
         update_task_norm_only=cfg.tta.update_task_norm_only,
