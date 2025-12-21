@@ -36,12 +36,14 @@ class DUSATTAModule(pl.LightningModule):
         num_classes: int = 1000,
         sample_log_dir: Optional[str] = None,
         enable_sample_logging: bool = True,
+        scheduler_config: Optional[Dict[str, Any]] = None,
     ):
         """
         Args:
             model: Combined discriminative + generative model
             learning_rate: Learning rate for Adam optimizer
             weight_decay: Weight decay for optimizer
+            scheduler_config: Optional learning rate scheduler configuration
             continual: If False, reset model between tasks (fully TTA)
             update_auxiliary: Whether to update auxiliary model parameters
             update_task_norm_only: If True, only update norm layers in task model
@@ -65,7 +67,8 @@ class DUSATTAModule(pl.LightningModule):
         self.log_aux_metrics = log_aux_metrics
         self.enable_sample_logging = enable_sample_logging
         self.sample_log_dir = Path(sample_log_dir) if sample_log_dir else None
-
+        self.scheduler_config = scheduler_config or {}
+        
         # Current task info (set by callback)
         self.current_task_name = "unknown"
         self.current_task_idx = 0
@@ -437,9 +440,51 @@ class DUSATTAModule(pl.LightningModule):
             lr=self.learning_rate,
             weight_decay=self.weight_decay,
         )
+        
+        scheduler = self._build_lr_scheduler(optimizer)
+        if scheduler is None:
+            return optimizer
 
-        return optimizer
+        return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
+    def _build_lr_scheduler(self, optimizer: torch.optim.Optimizer):
+        """Build a learning rate scheduler from config."""
+        if not self.scheduler_config:
+            return None
+
+        name = str(self.scheduler_config.get("name", "")).lower()
+        if name in {"", "none", "null"}:
+            return None
+
+        interval = self.scheduler_config.get("interval", "step")
+        frequency = int(self.scheduler_config.get("frequency", 1))
+        monitor = self.scheduler_config.get("monitor")
+
+        if name == "cosine":
+            t_max = int(self.scheduler_config.get("t_max", 100))
+            eta_min = float(self.scheduler_config.get("eta_min", 0.0))
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=t_max, eta_min=eta_min
+            )
+        elif name == "step":
+            step_size = int(self.scheduler_config.get("step_size", 1))
+            gamma = float(self.scheduler_config.get("gamma", 0.1))
+            scheduler = torch.optim.lr_scheduler.StepLR(
+                optimizer, step_size=step_size, gamma=gamma
+            )
+        else:
+            raise ValueError(f"Unsupported scheduler type: {name}")
+
+        scheduler_config = {
+            "scheduler": scheduler,
+            "interval": interval,
+            "frequency": frequency,
+        }
+        if monitor:
+            scheduler_config["monitor"] = monitor
+
+        return scheduler_config
+    
     def on_train_epoch_start(self):
         """Called at the start of each task (epoch)."""
         # Reset metrics for new task

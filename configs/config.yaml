@@ -27,6 +27,14 @@ tta:
 optimizer:
   learning_rate: 4e-5
   weight_decay: 0.0
+  scheduler:
+    name: null  # Options: null, cosine, step
+    interval: "step"  # step-level updates for TTA
+    frequency: 1
+    t_max: 1000  # CosineAnnealingLR
+    eta_min: 0.0
+    step_size: 100  # StepLR
+    gamma: 0.5
 
 # Logging
 logging:
