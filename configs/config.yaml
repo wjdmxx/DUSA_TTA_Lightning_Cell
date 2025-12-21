@@ -12,7 +12,7 @@ data_root: "/mnt/bit/data/imagenet-c/"  # UPDATE THIS
 
 # Experiment settings
 seed: 42
-experiment_name: "conv_next_4e-5_bandit"
+experiment_name: "conv_next_4e-5_real_topk_entropy_weight_loss_no_softmax_0.015_0.30_0.30"
 
 # TTA settings
 tta:
@@ -33,7 +33,7 @@ logging:
   use_wandb: true
   wandb_project: "dusa-tta"
   wandb_entity: "lyxszn-beihang-university"  # Set to your W&B username/team
-  log_aux_metrics: true  # Log auxiliary metrics (loss_top_i, auc, etc.) - disabled by default
+  log_aux_metrics: false  # Log auxiliary metrics (loss_top_i, auc, etc.) - disabled by default
   enable_sample_logging: false  # Toggle per-sample CSV logging
   sample_log_dir: "${work_dir}/sample_logs"  # Per-experiment sample-level CSV outputs
 

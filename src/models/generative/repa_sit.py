@@ -348,6 +348,8 @@ class REPASiT(nn.Module):
         topk: int = 4,
         rand_budget: int = 2,
         temperature: float = 1.0,
+        normed_logit_scale: bool = False,
+        normed_logit_scale_kwargs: Optional[Dict] = None,
         sample_reverse_logits: bool = False,
         adaptive_loss_weight: bool = False,
         kendall_topk: int = 6,
@@ -365,6 +367,8 @@ class REPASiT(nn.Module):
         self.topk = topk
         self.rand_budget = rand_budget
         self.temperature = temperature
+        self.normed_logit_scale = normed_logit_scale
+        self.normed_logit_scale_kwargs = normed_logit_scale_kwargs
         self.sample_reverse_logits = sample_reverse_logits
         self.num_classes = num_classes
         self.adaptive_loss_weight = adaptive_loss_weight
@@ -479,6 +483,30 @@ class REPASiT(nn.Module):
 
         return images.to(self.device)
 
+
+    def entropy_to_scale(self, ori_logits, s_max=2.50, h_thr=0.30, gamma=2.0, detach=True):
+        """
+        ori_logits: (B, C)
+        returns:
+        scale: (B,) in [1, s_max]
+        H_norm: (B,)
+        """
+        # stable entropy
+        log_p = F.log_softmax(ori_logits, dim=-1)
+        p = log_p.exp()
+        H = -(p * log_p).sum(dim=-1)  # (B,)
+        C = ori_logits.size(-1)
+        H_norm = H / math.log(C)  # (B,) ~ [0, 1]
+
+        # threshold + power mapping (low entropy -> high scale)
+        g = ((h_thr - H_norm) / h_thr).clamp(0.0, 1.0).pow(gamma)
+        scale = 1.0 + (s_max - 1.0) * g
+
+        if detach:
+            scale = scale.detach()
+            H_norm = H_norm.detach()
+        return scale, H_norm
+
     def forward(
         self,
         images: torch.Tensor,
@@ -508,8 +536,14 @@ class REPASiT(nn.Module):
         # VAE encode
         x0 = self.vae.encode(x_img)  # (B, 4, 32, 32)
 
+        if self.normed_logit_scale:
+            scale, _ = self.entropy_to_scale(ori_logits, **(self.normed_logit_scale_kwargs or {}))
+            scaled_normed_logits = normed_logits * scale.unsqueeze(-1)
+        else:
+            scaled_normed_logits = normed_logits
+
         # Top-k + random sampling
-        topk_logits, topk_idx = torch.topk(normed_logits, self.topk, dim=-1)  # (B, topk)
+        topk_logits, topk_idx = torch.topk(scaled_normed_logits, self.topk, dim=-1)  # (B, topk)
 
         if self.rand_budget > 0:
             # Get non-topk indices
@@ -532,7 +566,7 @@ class REPASiT(nn.Module):
             if self.sample_reverse_logits:
                 prob_as_coeff = F.softmax(topk_logits, dim=-1)  # Only use topk for weighting
             else:
-                prob_as_coeff = F.softmax(torch.gather(normed_logits, 1, forward_idx), dim=-1)
+                prob_as_coeff = F.softmax(torch.gather(scaled_normed_logits, 1, forward_idx), dim=-1)
 
             K = self.topk + self.rand_budget
         else:
@@ -590,6 +624,12 @@ class REPASiT(nn.Module):
             aux_losses["forward_idx"] = forward_idx
             aux_losses["selected_ori_logits"] = selected_ori_logits
             aux_losses["selected_norm_logits"] = selected_norm_logits
+
+            log_p = F.log_softmax(ori_logits, dim=-1)  # (B, C)
+            p = log_p.exp()
+            ent = -(p * log_p).sum(dim=-1)  # (B,)
+            aux_losses["sample_entropy"] = ent
+
             if self.time_selector is not None and bandit_contexts is not None and bandit_arm_indices is not None:
                 rewards = (aux_losses["sample_kendall_tau"].detach() + 1.0) * 0.5  # Map to [0, 1]
                 self.time_selector.observe(
@@ -611,22 +651,30 @@ class REPASiT(nn.Module):
         # Compute per-sample REPA loss
         per_sample_loss = self._compute_repa_loss(weighted_out, target)  # (B,)
 
+        # if self.adaptive_loss_weight:
+        #     # # Dynamic Kendall-based sample selection and weighting
+        #     # kendall_scores = aux_losses["sample_kendall_tau"].detach()  # (B,)
+        #     k = min(self.kendall_topk, B)
+        #     k = max(k, 1)
+        #     topk_values, topk_indices = torch.topk(kendall_scores, k=k, dim=0)
+
+        #     selected_losses = per_sample_loss[topk_indices]
+        #     if self.kendall_gate_only:
+        #         loss = selected_losses.mean()
+        #     else:
+        #         weights = F.softmax(topk_values / self.kendall_temperature, dim=0)
+        #         loss = torch.sum(selected_losses * weights)
+
+        #         aux_losses["kendall_topk_mean"] = topk_values.mean()
+        #         aux_losses["kendall_weight_mean"] = weights.mean()
+        # else:
+        #     loss = per_sample_loss.mean()
+
         if self.adaptive_loss_weight:
-            # Dynamic Kendall-based sample selection and weighting
-            kendall_scores = aux_losses["sample_kendall_tau"].detach()  # (B,)
-            k = min(self.kendall_topk, B)
-            k = max(k, 1)
-            topk_values, topk_indices = torch.topk(kendall_scores, k=k, dim=0)
-
-            selected_losses = per_sample_loss[topk_indices]
-            if self.kendall_gate_only:
-                loss = selected_losses.mean()
-            else:
-                weights = F.softmax(topk_values / self.kendall_temperature, dim=0)
-                loss = torch.sum(selected_losses * weights)
-
-                aux_losses["kendall_topk_mean"] = topk_values.mean()
-                aux_losses["kendall_weight_mean"] = weights.mean()
+            entropy_weight, _ = self.entropy_to_scale(torch.gather(ori_logits, 1, forward_idx), **(self.normed_logit_scale_kwargs or {}))
+            # weight = F.softmax(entropy_weight, dim=0)
+            weight = entropy_weight
+            loss = torch.dot(per_sample_loss, weight) / weight.sum().clamp_min(1e-12)
         else:
             loss = per_sample_loss.mean()
 
