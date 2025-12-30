@@ -14,7 +14,7 @@ from einops import rearrange
 
 from .scheduler import FlowScheduler, create_time_sampler
 from .vae import VAEEncoder
-from .time_selector import ContextualTimeStepSelector
+from .time_selector import ContextualTimeStepSelector, ThompsonSamplingTimeStepSelector
 
 
 def modulate(x, shift, scale):
@@ -443,6 +443,20 @@ class REPASiT(nn.Module):
                 include_energy=time_sampler_kwargs.get("include_energy", True),
                 feature_eps=time_sampler_kwargs.get("feature_eps", 1e-6),
             ).to(self.device)
+        elif time_sampler_type == "thompson_sampling":
+            time_candidates = time_sampler_kwargs.get("time_candidates") or time_sampler_kwargs.get("t_candidates")
+            if time_candidates is None:
+                # Default to an 8-step grid if not provided
+                time_candidates = torch.linspace(0.05, 0.95, steps=8).tolist()
+
+            self.time_selector = ThompsonSamplingTimeStepSelector(
+                time_candidates=time_candidates,
+                gamma=time_sampler_kwargs.get("gamma", 0.995),
+                prior_alpha=time_sampler_kwargs.get("prior_alpha", 1.0),
+                prior_beta=time_sampler_kwargs.get("prior_beta", 1.0),
+                update_interval=time_sampler_kwargs.get("update_interval", 1),
+                tie_break_noise=time_sampler_kwargs.get("tie_break_noise", 1e-8),
+            ).to(self.device)
         else:
             self.time_sampler = create_time_sampler(time_sampler_type, **time_sampler_kwargs)
 
@@ -582,10 +596,19 @@ class REPASiT(nn.Module):
 
         if self.time_selector is not None:
             with torch.no_grad():
-                selected_t, bandit_arm_indices, bandit_contexts, bandit_extra = self.time_selector.select_timesteps(
-                    images=images,
-                    logits=ori_logits,
-                )
+                # ThompsonSamplingTimeStepSelector is context-free, uses batch_size
+                # ContextualTimeStepSelector uses images and logits
+                if isinstance(self.time_selector, ThompsonSamplingTimeStepSelector):
+                    selected_t, bandit_arm_indices, bandit_contexts, bandit_extra = self.time_selector.select_timesteps(
+                        batch_size=B,
+                        images=images,
+                        logits=ori_logits,
+                    )
+                else:
+                    selected_t, bandit_arm_indices, bandit_contexts, bandit_extra = self.time_selector.select_timesteps(
+                        images=images,
+                        logits=ori_logits,
+                    )
             t = selected_t.to(self.device)
         else:
             t = self.time_sampler(B).to(self.device)
