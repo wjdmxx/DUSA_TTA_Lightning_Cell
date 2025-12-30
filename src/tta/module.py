@@ -466,12 +466,55 @@ class DUSATTAModule(pl.LightningModule):
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 optimizer, T_max=t_max, eta_min=eta_min
             )
+
         elif name == "step":
             step_size = int(self.scheduler_config.get("step_size", 1))
             gamma = float(self.scheduler_config.get("gamma", 0.1))
             scheduler = torch.optim.lr_scheduler.StepLR(
                 optimizer, step_size=step_size, gamma=gamma
             )
+
+        elif name in {"onecycle", "one_cycle", "onecyclelr"}:
+            # OneCycleLR should step every optimizer step
+            interval = "step"
+            frequency = 1
+
+            # Prefer explicit total_steps; otherwise try infer from trainer
+            total_steps = self.scheduler_config.get("total_steps", None)
+            if total_steps is None:
+                # Lightning usually can provide this after Trainer is attached
+                if getattr(self, "trainer", None) is not None:
+                    total_steps = getattr(self.trainer, "estimated_stepping_batches", None)
+            if total_steps is None:
+                raise ValueError(
+                    "OneCycleLR requires total_steps. Please set scheduler_config['total_steps'] "
+                    "or ensure trainer.estimated_stepping_batches is available."
+                )
+            total_steps = int(total_steps)
+            
+            # Core OneCycle params
+            max_lr = float(self.scheduler_config.get("max_lr", self.learning_rate))
+            pct_start = float(self.scheduler_config.get("pct_start", 0.1))
+            anneal_strategy = str(self.scheduler_config.get("anneal_strategy", "cos")).lower()
+            div_factor = float(self.scheduler_config.get("div_factor", 25.0))
+            final_div_factor = float(self.scheduler_config.get("final_div_factor", 1e3))
+
+            # For Adam, cycling betas can add extra dynamics; default off for TTA stability
+            cycle_momentum = bool(self.scheduler_config.get("cycle_momentum", False))
+            three_phase = bool(self.scheduler_config.get("three_phase", False))
+
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                optimizer,
+                max_lr=max_lr,
+                total_steps=total_steps,
+                pct_start=pct_start,
+                anneal_strategy=anneal_strategy,
+                div_factor=div_factor,
+                final_div_factor=final_div_factor,
+                cycle_momentum=cycle_momentum,
+                three_phase=three_phase,
+            )
+
         else:
             raise ValueError(f"Unsupported scheduler type: {name}")
 
@@ -480,11 +523,11 @@ class DUSATTAModule(pl.LightningModule):
             "interval": interval,
             "frequency": frequency,
         }
-        if monitor:
+        if monitor and name not in {"onecycle", "one_cycle", "onecyclelr"}:
             scheduler_config["monitor"] = monitor
 
         return scheduler_config
-    
+
     def on_train_epoch_start(self):
         """Called at the start of each task (epoch)."""
         # Reset metrics for new task

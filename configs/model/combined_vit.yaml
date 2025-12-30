@@ -31,23 +31,34 @@ generative:
   # Loss settings
   topk: 4
   rand_budget: 2
+  normed_logit_scale: false
+  normed_logit_scale_kwargs:
+    s_max: 3.0
+    h_thr: 0.015
+    gamma: 3.0
   temperature: 1.0
   sample_reverse_logits: false
-  adaptive_loss_weight: true
-  kendall_topk: 7
+  adaptive_loss_weight: false
+  kendall_topk: 8
   kendall_gate_only: true
-  # kendall_temperature: 1.0
+  kendall_temperature: -1.0
 
   # Scheduler settings
   scheduler_type: "linear"  # linear or reverse_linear
-  # Timestep policy (set to "uniform" to disable contextual bandit)
-  time_sampler_type: "contextual_linucb"
+  
+  # # Timestep policy (set to "uniform" to disable contextual bandit)
+  # time_sampler_type: "contextual_linucb"
+  # time_sampler_kwargs:
+  #   time_candidates: [0.05, 0.12, 0.2, 0.3, 0.45, 0.6, 0.75, 0.9]
+  #   alpha: 2.0
+  #   lambda_reg: 1.0
+  #   gamma: 0.995
+  #   update_interval: 1
+  #   high_freq_ratio: 0.25
+  #   include_energy: true
+  #   feature_eps: 1.0e-6
+
+  time_sampler_type: "uniform"
   time_sampler_kwargs:
-    time_candidates: [0.05, 0.12, 0.2, 0.3, 0.45, 0.6, 0.75, 0.9]
-    alpha: 2.0
-    lambda_reg: 1.0
-    gamma: 0.995
-    update_interval: 1
-    high_freq_ratio: 0.25
-    include_energy: true
-    feature_eps: 1.0e-6
+    t_min: 0.25
+    t_max: 0.25

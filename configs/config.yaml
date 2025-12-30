@@ -12,7 +12,7 @@ data_root: "/mnt/bit/data/imagenet-c/"  # UPDATE THIS
 
 # Experiment settings
 seed: 42
-experiment_name: "conv_next_4e-5_real_topk_entropy_weight_loss_no_softmax_0.015_0.30_0.30"
+experiment_name: "conv_next_onecycle_scheduler_pct_start_20"
 
 # TTA settings
 tta:
@@ -28,13 +28,16 @@ optimizer:
   learning_rate: 4e-5
   weight_decay: 0.0
   scheduler:
-    name: null  # Options: null, cosine, step
+    name: "onecycle"  # Options: null, cosine, step
     interval: "step"  # step-level updates for TTA
     frequency: 1
-    t_max: 1000  # CosineAnnealingLR
-    eta_min: 0.0
-    step_size: 100  # StepLR
-    gamma: 0.5
+    max_lr: 8.0e-5
+    pct_start: 0.20
+    anneal_strategy: cos
+    div_factor: 2.0
+    final_div_factor: 4.0
+    cycle_momentum: false
+    three_phase: false
 
 # Logging
 logging:
