@@ -260,6 +260,246 @@ class DiscountedContextualLinUCB(nn.Module):
             self.b[arm].add_((rew_arm * ctx_arm).sum(dim=0))
 
 
+class DiscountedThompsonSampling(nn.Module):
+    """Discounted Thompson Sampling for non-stationary multi-armed bandits.
+
+    Context-free bandit using Beta distributions for each arm.
+    Uses exponential discounting to adapt to non-stationary reward distributions.
+
+    Each arm maintains:
+      - alpha: pseudo-count of successes (discounted)
+      - beta: pseudo-count of failures (discounted)
+
+    Discounting rule (each step):
+      alpha <- gamma * alpha + (1 - gamma) * prior_alpha
+      beta <- gamma * beta + (1 - gamma) * prior_beta
+
+    Update rule:
+      alpha[arm] += reward  (reward in [0, 1])
+      beta[arm] += (1 - reward)
+    """
+
+    def __init__(
+        self,
+        num_arms: int,
+        gamma: float = 0.99,
+        prior_alpha: float = 1.0,
+        prior_beta: float = 1.0,
+        tie_break_noise: float = 1e-8,
+    ):
+        super().__init__()
+        if num_arms <= 0:
+            raise ValueError(f"num_arms must be positive, got {num_arms}")
+        if not (0.0 < float(gamma) <= 1.0):
+            raise ValueError(f"gamma must be in (0,1], got {gamma}")
+        if prior_alpha <= 0 or prior_beta <= 0:
+            raise ValueError(f"prior_alpha and prior_beta must be positive")
+
+        self.num_arms = int(num_arms)
+        self.gamma = float(gamma)
+        self.prior_alpha = float(prior_alpha)
+        self.prior_beta = float(prior_beta)
+        self.tie_break_noise = float(tie_break_noise)
+
+        # Beta distribution parameters for each arm: (alpha, beta)
+        self.register_buffer("alpha", torch.full((num_arms,), prior_alpha))
+        self.register_buffer("beta", torch.full((num_arms,), prior_beta))
+
+    @torch.no_grad()
+    def reset_stats(self) -> None:
+        """Reset to prior distribution."""
+        self.alpha.fill_(self.prior_alpha)
+        self.beta.fill_(self.prior_beta)
+
+    @torch.no_grad()
+    def _discount_one_step(self) -> None:
+        """Discount all arms one step towards prior."""
+        if self.gamma >= 1.0:
+            return
+
+        g = self.gamma
+        # Discount towards prior: alpha <- g * alpha + (1-g) * prior_alpha
+        self.alpha.mul_(g).add_((1.0 - g) * self.prior_alpha)
+        self.beta.mul_(g).add_((1.0 - g) * self.prior_beta)
+
+    @torch.no_grad()
+    def select(self, batch_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Sample arms using Thompson Sampling.
+
+        Args:
+            batch_size: number of samples to select
+
+        Returns:
+            arm_indices: (batch_size,) selected arm indices
+            theta_samples: (batch_size, num_arms) sampled theta values for debugging
+        """
+        device = self.alpha.device
+        dtype = self.alpha.dtype
+
+        # Sample from Beta(alpha, beta) for each arm
+        # Use torch.distributions.Beta for proper sampling
+        alpha_expanded = self.alpha.unsqueeze(0).expand(batch_size, -1)  # (B, K)
+        beta_expanded = self.beta.unsqueeze(0).expand(batch_size, -1)  # (B, K)
+
+        # Clamp to ensure valid Beta distribution parameters
+        alpha_clamped = alpha_expanded.clamp(min=1e-6)
+        beta_clamped = beta_expanded.clamp(min=1e-6)
+
+        # Sample from Beta distribution
+        beta_dist = torch.distributions.Beta(alpha_clamped, beta_clamped)
+        theta_samples = beta_dist.sample()  # (B, K)
+
+        # Add tie-breaking noise
+        if self.tie_break_noise > 0.0:
+            theta_samples = theta_samples + self.tie_break_noise * torch.randn_like(theta_samples)
+
+        # Select arm with highest sampled value
+        arm_indices = torch.argmax(theta_samples, dim=1)  # (B,)
+
+        return arm_indices, theta_samples
+
+    @torch.no_grad()
+    def update(self, rewards: torch.Tensor, arm_indices: torch.Tensor) -> None:
+        """Update Beta distribution parameters based on observed rewards.
+
+        Args:
+            rewards: (N,) rewards in [0, 1]
+            arm_indices: (N,) arm indices that were played
+        """
+        if rewards.numel() == 0:
+            return
+
+        device = self.alpha.device
+        dtype = self.alpha.dtype
+        rewards = rewards.to(device=device, dtype=dtype).view(-1).clamp(0.0, 1.0)
+        arm_indices = arm_indices.to(device=device).view(-1).long()
+
+        # Filter non-finite values
+        finite = torch.isfinite(rewards)
+        if not finite.all():
+            rewards = rewards[finite]
+            arm_indices = arm_indices[finite]
+            if rewards.numel() == 0:
+                return
+
+        # Discount before update
+        self._discount_one_step()
+
+        # Aggregate rewards per arm
+        unique_arms = torch.unique(arm_indices)
+        for arm in unique_arms.tolist():
+            mask = arm_indices == arm
+            if not mask.any():
+                continue
+            rew_arm = rewards[mask]
+
+            # Update Beta parameters
+            # reward in [0,1]: treat as fractional success
+            self.alpha[arm] += rew_arm.sum()
+            self.beta[arm] += (1.0 - rew_arm).sum()
+
+
+class ThompsonSamplingTimeStepSelector(nn.Module):
+    """Context-free timestep selection using Discounted Thompson Sampling."""
+
+    def __init__(
+        self,
+        time_candidates: List[float],
+        gamma: float = 0.995,
+        prior_alpha: float = 1.0,
+        prior_beta: float = 1.0,
+        update_interval: int = 1,
+        tie_break_noise: float = 1e-8,
+    ):
+        super().__init__()
+        if len(time_candidates) == 0:
+            raise ValueError("time_candidates must contain at least one timestep")
+
+        time_tensor = torch.tensor(time_candidates, dtype=torch.float32).clamp(0.0, 1.0)
+        self.register_buffer("time_candidates", time_tensor)
+
+        self.bandit = DiscountedThompsonSampling(
+            num_arms=len(time_candidates),
+            gamma=gamma,
+            prior_alpha=prior_alpha,
+            prior_beta=prior_beta,
+            tie_break_noise=tie_break_noise,
+        )
+
+        self.update_interval = max(1, int(update_interval))
+
+        # Pending buffers for batch updates
+        self._pending: Dict[str, List[torch.Tensor]] = {"arms": [], "rewards": []}
+
+    @torch.no_grad()
+    def select_timesteps(
+        self,
+        batch_size: int,
+        images: Optional[torch.Tensor] = None,
+        logits: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], Dict[str, torch.Tensor]]:
+        """Select timesteps using Thompson Sampling.
+
+        Args:
+            batch_size: number of samples
+            images: (optional) images tensor, unused but kept for API compatibility
+            logits: (optional) logits tensor, unused but kept for API compatibility
+
+        Returns:
+            timesteps: (batch_size,) selected timesteps
+            arm_indices: (batch_size,) selected arm indices
+            contexts: None (context-free)
+            extra_info: dict with theta samples and arm info
+        """
+        arm_indices, theta_samples = self.bandit.select(batch_size)
+        timesteps = self.time_candidates[arm_indices]
+
+        extra_info = {
+            "theta_samples": theta_samples,
+            "selected_arms": arm_indices,
+            "selected_timesteps": timesteps,
+            "alpha": self.bandit.alpha.clone(),
+            "beta": self.bandit.beta.clone(),
+        }
+
+        return timesteps, arm_indices, None, extra_info
+
+    @torch.no_grad()
+    def observe(
+        self,
+        contexts: Optional[torch.Tensor],
+        arm_indices: torch.Tensor,
+        rewards: torch.Tensor,
+        force_update: bool = False,
+    ) -> None:
+        """Observe rewards and update bandit.
+
+        Args:
+            contexts: ignored (context-free)
+            arm_indices: (N,) arm indices
+            rewards: (N,) rewards in [0, 1] (normalized Kendall tau)
+            force_update: if True, flush pending updates immediately
+        """
+        self._pending["arms"].append(arm_indices.detach())
+        self._pending["rewards"].append(rewards.detach())
+
+        should_update = force_update or (len(self._pending["arms"]) >= self.update_interval)
+        if not should_update:
+            return
+
+        # Process pending updates
+        for arms, rew in zip(self._pending["arms"], self._pending["rewards"]):
+            self.bandit.update(rew, arms)
+
+        self._pending = {"arms": [], "rewards": []}
+
+    @torch.no_grad()
+    def reset(self) -> None:
+        """Reset bandit stats and pending buffers."""
+        self.bandit.reset_stats()
+        self._pending = {"arms": [], "rewards": []}
+
+
 class ContextualTimeStepSelector(nn.Module):
     """Extract context and run discounted LinUCB over candidate timesteps."""
 
