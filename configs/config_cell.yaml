@@ -1,18 +1,18 @@
-# Main configuration file
+# Cell TTA main configuration file
 defaults:
-  - model: combined_resnet
-  - data: imagenet_c
+  - model: combined_cell
+  - data: cell
   - trainer: default
   - experiment: null  # Override with experiment configs
   - _self_
 
 # Paths
 work_dir: ${hydra:runtime.output_dir}
-data_root: "/mnt/bit/data/imagenet-c/"  # UPDATE THIS
+data_root: "/path/to/cell/dataset/"  # UPDATE THIS: path to cell dataset
 
 # Experiment settings
 seed: 42
-experiment_name: "resnet_4e-5"
+experiment_name: "cell_tta"
 
 # TTA settings
 tta:
@@ -20,28 +20,22 @@ tta:
   update_auxiliary: true  # Update generative model
   update_task_norm_only: false  # Only update task model norms
   forward_mode: "normed_logits_with_logits"  # DUSA default
-  # forward_mode: "logits"  # Disable auxiliary model
-
 
 # Optimizer settings
 optimizer:
   learning_rate: 4e-5
   weight_decay: 0.0
   scheduler:
-    name: null  # Options: null, cosine, step
-    interval: "step"
-    frequency: 1
-    t_max: 1000
-    eta_min: 0.0
-    step_size: 100
-    gamma: 0.5
+    name: "null"
 
 # Logging
 logging:
   use_wandb: true
-  wandb_project: "dusa-tta-resnet"
-  wandb_entity: "lyxszn-beihang-university"  # Set to your W&B username/team
-  log_aux_metrics: false  # Log auxiliary metrics (loss_top_i, auc, etc.) - disabled by default
+  wandb_project: "cell-tta"
+  wandb_entity: null  # Set to your W&B username/team
+  log_aux_metrics: true
+  enable_sample_logging: false
+  sample_log_dir: "${work_dir}/sample_logs"
 
 # Hydra settings
 hydra:

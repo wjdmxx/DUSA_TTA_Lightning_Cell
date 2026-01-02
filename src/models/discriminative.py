@@ -55,14 +55,25 @@ class TimmClassifier(nn.Module):
         
         # Load custom checkpoint if provided
         if checkpoint_path is not None:
-            state_dict = torch.load(checkpoint_path, map_location="cpu")
+            ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
             # Handle different checkpoint formats
-            if "state_dict" in state_dict:
-                state_dict = state_dict["state_dict"]
+            if isinstance(ckpt, dict):
+                if "model" in ckpt:
+                    state_dict = ckpt["model"]  # cell_code/ViT training format
+                elif "state_dict" in ckpt:
+                    state_dict = ckpt["state_dict"]  # Lightning format
+                else:
+                    state_dict = ckpt
+            else:
+                state_dict = ckpt
             # Remove 'model.' prefix if present (Lightning checkpoints)
             state_dict = {k.replace("model.", ""): v for k, v in state_dict.items()}
-            self.model.load_state_dict(state_dict, strict=False)
+            missing, unexpected = self.model.load_state_dict(state_dict, strict=False)
             print(f"Loaded checkpoint from {checkpoint_path}")
+            if missing:
+                print(f"  Missing keys: {missing[:5]}{'...' if len(missing) > 5 else ''}")
+            if unexpected:
+                print(f"  Unexpected keys: {unexpected[:5]}{'...' if len(unexpected) > 5 else ''}")
         
         # Get model info for feature extraction
         self.feature_info = self.model.feature_info if hasattr(self.model, "feature_info") else None

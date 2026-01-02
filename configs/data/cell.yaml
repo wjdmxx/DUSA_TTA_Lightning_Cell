@@ -1,0 +1,16 @@
+# Cell dataset configuration
+root: "${data_root}"
+
+# DataLoader settings
+batch_size: 8
+shuffle: true
+num_workers: 4
+pin_memory: true
+persistent_workers: true
+
+# Transform settings
+input_size: 224  # Resize size for discriminative model (output is [0, 1] tensor)
+use_center_crop: false  # Use Resize instead of CenterCrop for cell images
+
+# Class mapping (optional, will be auto-detected from folder names if null)
+class_to_idx: null
