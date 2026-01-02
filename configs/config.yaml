@@ -12,7 +12,7 @@ data_root: "/mnt/bit/data/imagenet-c/"  # UPDATE THIS
 
 # Experiment settings
 seed: 42
-experiment_name: "conv_next_onecycle_scheduler_pct_start_20"
+experiment_name: "conv_next_ThompsonSampling"
 
 # TTA settings
 tta:
@@ -28,23 +28,23 @@ optimizer:
   learning_rate: 4e-5
   weight_decay: 0.0
   scheduler:
-    name: "onecycle"  # Options: null, cosine, step
-    interval: "step"  # step-level updates for TTA
-    frequency: 1
-    max_lr: 8.0e-5
-    pct_start: 0.20
-    anneal_strategy: cos
-    div_factor: 2.0
-    final_div_factor: 4.0
-    cycle_momentum: false
-    three_phase: false
+    name: "null"  # Options: null, cosine, step
+    # interval: "step"  # step-level updates for TTA
+    # frequency: 1
+    # max_lr: 8.0e-5
+    # pct_start: 0.20
+    # anneal_strategy: cos
+    # div_factor: 2.0
+    # final_div_factor: 4.0
+    # cycle_momentum: false
+    # three_phase: false
 
 # Logging
 logging:
   use_wandb: true
   wandb_project: "dusa-tta"
   wandb_entity: "lyxszn-beihang-university"  # Set to your W&B username/team
-  log_aux_metrics: false  # Log auxiliary metrics (loss_top_i, auc, etc.) - disabled by default
+  log_aux_metrics: true  # Log auxiliary metrics (loss_top_i, auc, etc.) - disabled by default
   enable_sample_logging: false  # Toggle per-sample CSV logging
   sample_log_dir: "${work_dir}/sample_logs"  # Per-experiment sample-level CSV outputs
 
