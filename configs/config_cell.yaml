@@ -8,7 +8,7 @@ defaults:
 
 # Paths
 work_dir: ${hydra:runtime.output_dir}
-data_root: "/path/to/cell/dataset/"  # UPDATE THIS: path to cell dataset
+data_root: "/mnt/bit/liyuanxi/datasets/DUSA_cell/LISC/All/"  # UPDATE THIS: path to cell dataset
 
 # Experiment settings
 seed: 42
@@ -20,10 +20,11 @@ tta:
   update_auxiliary: true  # Update generative model
   update_task_norm_only: false  # Only update task model norms
   forward_mode: "normed_logits_with_logits"  # DUSA default
+  # forward_mode: "logits"  # DUSA default
 
 # Optimizer settings
 optimizer:
-  learning_rate: 4e-5
+  learning_rate: 1e-6
   weight_decay: 0.0
   scheduler:
     name: "null"
@@ -32,8 +33,8 @@ optimizer:
 logging:
   use_wandb: true
   wandb_project: "cell-tta"
-  wandb_entity: null  # Set to your W&B username/team
-  log_aux_metrics: true
+  wandb_entity: "lyxszn-beihang-university"  # Set to your W&B username/team
+  log_aux_metrics: false
   enable_sample_logging: false
   sample_log_dir: "${work_dir}/sample_logs"
 

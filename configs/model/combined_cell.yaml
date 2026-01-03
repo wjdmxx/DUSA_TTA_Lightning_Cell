@@ -6,11 +6,11 @@
 discriminative:
   model_name: "vit_base_patch16_224"
   pretrained: false  # Load from checkpoint instead
-  checkpoint_path: null  # Set to trained ViT-B/16 checkpoint path
+  checkpoint_path: "/mnt/bit/liyuanxi/projects/DUSA_TTA_Lightning_Cell/pretrained_models/vit_b_16_best.pt"  # Set to trained ViT-B/16 checkpoint path
   num_classes: 5  # Number of cell classes (adjust based on your dataset)
   # Normalization settings (ImageNet defaults, used in training)
-  normalize_mean: [0.485, 0.456, 0.406]
-  normalize_std: [0.229, 0.224, 0.225]
+  normalize_mean: [0.50, 0.50, 0.50]
+  normalize_std: [0.50, 0.50, 0.50]
 
 # Pixel Adapter: shared between discriminative and generative branches
 # pixel_adapter:
@@ -24,7 +24,7 @@ discriminative:
 # Generative model: SiT-B/4 (512x512 images)
 generative:
   sit_model_name: "SiT-B/4"  # SiT-B/4 for 512x512 images
-  sit_checkpoint: null  # Set to trained SiT-B/4 checkpoint path
+  sit_checkpoint: "/mnt/bit/liyuanxi/projects/DUSA_TTA_Lightning_Cell/pretrained_models/sit_b_4.pt"  # Set to trained SiT-B/4 checkpoint path
   num_classes: 5  # Number of cell classes (must match discriminative)
   image_size: 512  # Diffusion model input size
 
@@ -33,8 +33,8 @@ generative:
   vae_scaling_factor: 0.18215
 
   # Loss settings
-  topk: 4
-  rand_budget: 2
+  topk: 5
+  rand_budget: 0
   normed_logit_scale: false
   normed_logit_scale_kwargs:
     s_max: 3.0
@@ -50,6 +50,10 @@ generative:
   # Scheduler settings
   scheduler_type: "linear"
   # Timestep policy
-  time_sampler_type: "thompson_sampling"
+  # time_sampler_type: "thompson_sampling"
+  # time_sampler_kwargs:
+  #   time_candidates: [0.18, 0.20, 0.215, 0.235, 0.25, 0.27, 0.29, 0.31, 0.33, 0.35, 0.39, 0.43, 0.48, 0.53, 0.57, 0.60]
+  time_sampler_type: "uniform"
   time_sampler_kwargs:
-    time_candidates: [0.18, 0.20, 0.215, 0.235, 0.25, 0.27, 0.29, 0.31, 0.33, 0.35, 0.39, 0.43, 0.48, 0.53, 0.57, 0.60]
+    t_min: 0.50
+    t_max: 0.50

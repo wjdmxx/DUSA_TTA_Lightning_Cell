@@ -207,7 +207,7 @@ def main(cfg: DictConfig):
             devices=cfg.trainer.devices,
             strategy=cfg.trainer.strategy,
             precision=cfg.trainer.precision,
-            max_epochs=1,
+            max_epochs=cfg.trainer.max_epochs,
             gradient_clip_val=cfg.trainer.gradient_clip_val,
             accumulate_grad_batches=cfg.trainer.accumulate_grad_batches,
             log_every_n_steps=cfg.trainer.log_every_n_steps,

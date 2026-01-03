@@ -12,8 +12,8 @@ from .models import (
     create_repa_sit,
 )
 from .data import (
-    ImageNetCDataset,
-    create_imagenet_c_tasks,
+    CellDataset,
+    create_cell_tasks,
     create_tta_transform,
 )
 from .tta import DUSATTAModule
@@ -28,8 +28,8 @@ __all__ = [
     "create_combined_model",
     "REPASiT",
     "create_repa_sit",
-    "ImageNetCDataset",
-    "create_imagenet_c_tasks",
+    "CellDataset",
+    "create_cell_tasks",
     "create_tta_transform",
     "DUSATTAModule",
     "calculate_accuracy",
