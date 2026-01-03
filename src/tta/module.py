@@ -8,7 +8,7 @@ from typing import Optional, Dict, Any, List, Tuple
 
 import pytorch_lightning as pl
 import torch
-from torchmetrics import Accuracy
+from torchmetrics import Accuracy, F1Score, Precision, Recall
 
 from ..models import CombinedModel
 from ..utils import calculate_accuracy
@@ -79,6 +79,11 @@ class DUSATTAModule(pl.LightningModule):
         # TorchMetrics for cumulative accuracy (automatically handles accumulation)
         self.train_acc_top1 = Accuracy(task="multiclass", num_classes=num_classes, top_k=1)
         self.train_acc_top5 = Accuracy(task="multiclass", num_classes=num_classes, top_k=5)
+        
+        # Additional metrics: F1, Precision, Sensitivity (Recall)
+        self.train_f1 = F1Score(task="multiclass", num_classes=num_classes, average="macro")
+        self.train_precision = Precision(task="multiclass", num_classes=num_classes, average="macro")
+        self.train_sensitivity = Recall(task="multiclass", num_classes=num_classes, average="macro")  # Sensitivity = Recall
 
         # Save initial model state for reset
         self.save_hyperparameters(ignore=["model"])
@@ -110,6 +115,9 @@ class DUSATTAModule(pl.LightningModule):
         """Reset accumulated metrics for a new task."""
         self.train_acc_top1.reset()
         self.train_acc_top5.reset()
+        self.train_f1.reset()
+        self.train_precision.reset()
+        self.train_sensitivity.reset()
 
     def _configure_model(self):
         """Configure which parameters to update."""
@@ -352,6 +360,9 @@ class DUSATTAModule(pl.LightningModule):
         # Update TorchMetrics (automatically accumulates)
         self.train_acc_top1.update(logits, labels)
         self.train_acc_top5.update(logits, labels)
+        self.train_f1.update(logits, labels)
+        self.train_precision.update(logits, labels)
+        self.train_sensitivity.update(logits, labels)
 
         # Get cumulative accuracy (TorchMetrics handles the math)
         avg_top1 = self.train_acc_top1.compute() * 100.0
@@ -539,18 +550,33 @@ class DUSATTAModule(pl.LightningModule):
         # Get final cumulative accuracy from TorchMetrics
         final_avg_top1 = self.train_acc_top1.compute() * 100.0
         final_avg_top5 = self.train_acc_top5.compute() * 100.0
+        
+        # Get F1, Precision, Sensitivity (Recall)
+        final_f1 = self.train_f1.compute() * 100.0
+        final_precision = self.train_precision.compute() * 100.0
+        final_sensitivity = self.train_sensitivity.compute() * 100.0
 
         # Log final task accuracy with task-specific prefix
         task_prefix = f"task_{self.current_task_idx:02d}"
         self.log(f"{task_prefix}/final_top1", final_avg_top1, on_step=False, on_epoch=True, prog_bar=False)
         self.log(f"{task_prefix}/final_top5", final_avg_top5, on_step=False, on_epoch=True, prog_bar=False)
+        self.log(f"{task_prefix}/final_f1", final_f1, on_step=False, on_epoch=True, prog_bar=False)
+        self.log(f"{task_prefix}/final_precision", final_precision, on_step=False, on_epoch=True, prog_bar=False)
+        self.log(f"{task_prefix}/final_sensitivity", final_sensitivity, on_step=False, on_epoch=True, prog_bar=False)
 
         # Print task summary
-        self.print(f"\nTask '{self.current_task_name}' completed: " f"Avg Top-1={final_avg_top1:.2f}%, Avg Top-5={final_avg_top5:.2f}%")
+        self.print(
+            f"\nTask '{self.current_task_name}' completed: "
+            f"Avg Top-1={final_avg_top1:.2f}%, Avg Top-5={final_avg_top5:.2f}%\n"
+            f"  F1={final_f1:.2f}%, Precision={final_precision:.2f}%, Sensitivity={final_sensitivity:.2f}%"
+        )
 
     def get_final_accuracy(self) -> Dict[str, float]:
         """Get final accuracy for current task."""
         return {
             "top1": self.train_acc_top1.compute().item() * 100.0,
             "top5": self.train_acc_top5.compute().item() * 100.0,
+            "f1": self.train_f1.compute().item() * 100.0,
+            "precision": self.train_precision.compute().item() * 100.0,
+            "sensitivity": self.train_sensitivity.compute().item() * 100.0,
         }

@@ -61,3 +61,54 @@ def calculate_confidence(logits: torch.Tensor) -> Tuple[torch.Tensor, torch.Tens
     probs = F.softmax(logits, dim=-1)
     max_probs, predictions = torch.max(probs, dim=-1)
     return max_probs, predictions
+
+
+def calculate_classification_metrics(
+    predictions: torch.Tensor,
+    labels: torch.Tensor,
+    num_classes: int,
+) -> dict:
+    """
+    Calculate F1, Sensitivity (Recall), and Precision (macro-averaged).
+    
+    Args:
+        predictions: Predicted class indices (B,)
+        labels: Ground truth labels (B,)
+        num_classes: Total number of classes
+    
+    Returns:
+        Dictionary with F1, Sensitivity, and Precision values
+    """
+    # Initialize per-class counters
+    tp = torch.zeros(num_classes, device=predictions.device)
+    fp = torch.zeros(num_classes, device=predictions.device)
+    fn = torch.zeros(num_classes, device=predictions.device)
+    
+    for c in range(num_classes):
+        pred_c = predictions == c
+        label_c = labels == c
+        tp[c] = (pred_c & label_c).sum().float()
+        fp[c] = (pred_c & ~label_c).sum().float()
+        fn[c] = (~pred_c & label_c).sum().float()
+    
+    # Compute per-class precision, recall, F1
+    precision_per_class = tp / (tp + fp + 1e-8)
+    recall_per_class = tp / (tp + fn + 1e-8)
+    f1_per_class = 2 * precision_per_class * recall_per_class / (precision_per_class + recall_per_class + 1e-8)
+    
+    # Macro average (only for classes that appear in labels)
+    classes_in_labels = torch.unique(labels)
+    if len(classes_in_labels) > 0:
+        precision = precision_per_class[classes_in_labels].mean().item()
+        recall = recall_per_class[classes_in_labels].mean().item()
+        f1 = f1_per_class[classes_in_labels].mean().item()
+    else:
+        precision = 0.0
+        recall = 0.0
+        f1 = 0.0
+    
+    return {
+        "precision": precision * 100.0,
+        "sensitivity": recall * 100.0,  # Sensitivity = Recall
+        "f1": f1 * 100.0,
+    }
